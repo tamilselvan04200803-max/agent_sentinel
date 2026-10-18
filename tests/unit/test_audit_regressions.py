@@ -209,35 +209,31 @@ class TestAudit3ContainerStreaming:
     def test_timeout_fires_without_relying_on_communicate(self, tmp_path: Path) -> None:
         """Ensure timeout fires even when pipes are never closed (i.e. we don't
         deadlock on communicate())."""
-        import select
 
         runner = HardenedContainerRunner(ContainerConfig(timeout_seconds=0.2))
 
+        import threading
+
         class _HangPipe:
             def __init__(self) -> None:
-                self._r, self._w = os.pipe()
-                self._killed = False
+                self._killed_event = threading.Event()
 
             def read(self, size: int) -> bytes:
-                if self._killed:
-                    return b""
-                while not self._killed:
-                    ready, _, _ = select.select([self._r], [], [], 0.1)
-                    if ready:
-                        return os.read(self._r, size)
+                self._killed_event.wait()
                 return b""
 
+            @property
+            def _killed(self) -> bool:
+                return self._killed_event.is_set()
+
             def fileno(self) -> int:
-                return self._r
+                return -1
 
             def kill(self) -> None:
-                self._killed = True
-                with contextlib.suppress(OSError):
-                    os.close(self._w)
+                self._killed_event.set()
 
             def close(self) -> None:
-                with contextlib.suppress(OSError):
-                    os.close(self._r)
+                self._killed_event.set()
 
         out_pipe = _HangPipe()
         err_pipe = _HangPipe()

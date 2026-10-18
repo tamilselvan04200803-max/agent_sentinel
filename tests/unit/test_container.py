@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
 import io
-import os
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -42,38 +40,25 @@ class _SlowPipe:
     """
 
     def __init__(self) -> None:
-        self._r, self._w = os.pipe()
-        self._killed = False
+        import threading
+        self._killed_event = threading.Event()
 
     def read(self, size: int) -> bytes:
-        if self._killed:
-            return b""
-        # Block on select for up to 0.1 seconds; time out and return empty
-        # *only* when killed. This simulates a pipe that never produces data
-        # until the writer is closed via kill().
-        import select
-
-        while not self._killed:
-            ready, _, _ = select.select([self._r], [], [], 0.1)
-            if ready:
-                # Data/EOF available on the real fd
-                data = os.read(self._r, size)
-                return data
+        self._killed_event.wait()
         return b""
 
+    @property
+    def _killed(self) -> bool:
+        return self._killed_event.is_set()
+
     def fileno(self) -> int:
-        return self._r
+        return -1
 
     def close(self) -> None:
-        with contextlib.suppress(OSError):
-            os.close(self._r)
-        with contextlib.suppress(OSError):
-            os.close(self._w)
+        self._killed_event.set()
 
     def kill(self) -> None:
-        self._killed = True
-        with contextlib.suppress(OSError):
-            os.close(self._w)
+        self._killed_event.set()
 
 
 class TestContainerConfig:
