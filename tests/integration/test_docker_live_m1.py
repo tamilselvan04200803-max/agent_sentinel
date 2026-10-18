@@ -308,3 +308,56 @@ class TestDockerLiveM2PatchApplier:
         finally:
             import shutil as _shutil
             _shutil.rmtree(patched_ws, ignore_errors=True)
+
+
+class TestDockerLiveM5BenchmarkAdmission:
+    """Verifies that M5 Benchmark admission verification runs cleanly against
+    the real Docker container runner, confirming Gate 1 (baseline fails) and
+    Gate 2 (reference fix passes) with full container isolation.
+    """
+
+    @pytest.mark.integration
+    def test_live_docker_benchmark_admission_case_03_and_01(self) -> None:
+        if not is_docker_daemon_running() or not is_runner_image_available():
+            pytest.skip("Docker daemon or runner image unavailable")
+
+        import json
+        from datetime import UTC, datetime
+
+        from agentsentinel.domain.models import CaseSpec
+        from agentsentinel.evaluation.harness import verify_case_admission
+        from agentsentinel.evaluation.models import BenchmarkCase
+
+        fixtures_dir = Path(__file__).resolve().parent.parent / "fixtures" / "benchmark_cases"
+
+        def _load(case_name: str) -> BenchmarkCase:
+            case_dir = fixtures_dir / case_name
+            raw = json.loads((case_dir / "spec.json").read_text(encoding="utf-8"))
+            spec = CaseSpec(
+                case_id=raw["case_id"],
+                repo_url=raw["repo_url"],
+                base_commit=raw["base_commit"],
+                test_command=raw["test_command"],
+                allowed_edit_paths=tuple(raw["allowed_edit_paths"]),
+                failing_test_ids=tuple(raw["failing_test_ids"]),
+                created_at=datetime.now(UTC),
+            )
+            return BenchmarkCase(
+                case_spec=spec,
+                repo_source_path=case_dir / "src",
+                base_commit=spec.base_commit,
+                test_patch=(case_dir / "test.patch").read_text(encoding="utf-8"),
+                reference_fix_patch=(case_dir / "reference.patch").read_text(encoding="utf-8"),
+                fail_to_pass_tests=spec.failing_test_ids,
+                pass_to_pass_tests=(),
+                is_public_historical_commit=False,
+            )
+
+        # Test both case_03_none_coalescing and case_01_normalizer
+        for case_name in ("case_03_none_coalescing", "case_01_normalizer"):
+            case = _load(case_name)
+            verdict = verify_case_admission(case)
+            assert verdict.admitted is True, f"Failed admission for {case_name}: {verdict.reason}"
+            assert verdict.baseline_exit_code == ExitCode.TESTS_FAILED.value
+            assert verdict.reference_exit_code == ExitCode.OK.value
+
