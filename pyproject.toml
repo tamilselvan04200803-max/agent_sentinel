@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=40", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentsentinel"
+version = "0.1.0"
+description = "Deterministic, sandboxed, evidence-first automated software repair engine"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2,<9",
+    "pytest-cov>=5.0,<6",
+    "mypy>=1.10,<2",
+    "ruff>=0.4,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# ruff — strict linting & formatting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+src = ["src"]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear
+    "C4",       # flake8-comprehensions
+    "SIM",      # flake8-simplify
+    "TCH",      # flake8-type-checking
+    "ANN",      # flake8-annotations
+    "S",        # flake8-bandit (security)
+    "PTH",      # flake8-use-pathlib
+]
+ignore = [
+    "ANN101",   # missing type annotation for `self`
+    "ANN102",   # missing type annotation for `cls`
+    "S101",     # use of assert (allowed in tests)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S"]
+
+# ---------------------------------------------------------------------------
+# mypy — strict type checking
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_any_unimported = true
+files = ["src"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+]
+markers = [
+    "adversarial: marks tests as adversarial/security tests (deselect with '-m not adversarial')",
+    "unit: marks tests as pure unit tests",
+    "integration: marks tests as integration tests requiring Docker",
+]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src/agentsentinel"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+fail_under = 80
