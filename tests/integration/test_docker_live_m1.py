@@ -69,12 +69,12 @@ class TestDockerLiveM1:
                 )
             )
 
-            # Inside container, install pytest or run inline test runner
+            # Inside container, run standard library unittest runner
             res = runner.run_in_container(
                 case_id="case-live-broken",
                 patch_diff_hash="baseline",
                 workspace_host_path=ws,
-                command="python -m pytest test_normalizer.py",
+                command="python -m unittest test_normalizer.py",
             )
 
             assert res.exit_code == ExitCode.TESTS_FAILED
@@ -99,7 +99,7 @@ class TestDockerLiveM1:
                 case_id="case-live-fixed",
                 patch_diff_hash="fixed",
                 workspace_host_path=ws,
-                command="python -m pytest test_normalizer.py",
+                command="python -m unittest test_normalizer.py",
             )
 
             assert res.exit_code == ExitCode.OK

@@ -50,19 +50,23 @@ def normalize_token(text: str) -> str:
 '''
 
 NORMALIZER_TEST_SOURCE = '''"""Tests for normalizer module."""
-import pytest
+import unittest
 from normalizer import normalize_token
 
-def test_basic_lowercase():
-    assert normalize_token("  HELLO  ") == "hello"
+class TestNormalizer(unittest.TestCase):
+    def test_basic_lowercase(self):
+        self.assertEqual(normalize_token("  HELLO  "), "hello")
 
-def test_collapses_internal_whitespace():
-    # FAILS on buggy version ("foo   bar" -> "foo   bar")
-    assert normalize_token("foo   bar") == "foo bar"
+    def test_collapses_internal_whitespace(self):
+        # FAILS on buggy version ("foo   bar" -> "foo   bar")
+        self.assertEqual(normalize_token("foo   bar"), "foo bar")
 
-def test_strips_control_characters():
-    # FAILS on buggy version ("foo\\x00bar" -> "foo\\x00bar")
-    assert normalize_token("foo\\x00\\x08bar") == "foobar"
+    def test_strips_control_characters(self):
+        # FAILS on buggy version ("foo\\x00bar" -> "foo\\x00bar")
+        self.assertEqual(normalize_token("foo\\x00\\x08bar"), "foobar")
+
+if __name__ == "__main__":
+    unittest.main()
 '''
 
 NORMALIZER_PATCH_DIFF = """--- a/normalizer.py
