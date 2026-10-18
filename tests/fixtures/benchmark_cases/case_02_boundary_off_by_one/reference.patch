@@ -1,0 +1,13 @@
+diff --git a/paginator.py b/paginator.py
+index cc01a33..42c9c9d 100644
+--- a/paginator.py
++++ b/paginator.py
+@@ -10,6 +10,6 @@ def paginate(items: Sequence[T], page_size: int) -> list[list[T]]:
+     pages: list[list[T]] = []
+     i = 0
+     while i < len(items):
+-        pages.append(list(items[i : i + page_size - 1]))
+-        i += page_size - 1
++        pages.append(list(items[i : i + page_size]))
++        i += page_size
+     return pages

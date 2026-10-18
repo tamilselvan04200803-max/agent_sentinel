@@ -216,6 +216,9 @@ class RepairStateMachine:
     pricing_registry: PricingRegistry = field(default_factory=PricingRegistry)
     max_attempts: int = 5
     db_path: Path = field(default_factory=lambda: Path(".agentsentinel.db"))
+    image_digest: str = "sha256:unspecified"
+    auto_approve_on_fix: bool = False
+    source_workspace_override: Path | None = None
 
     def __post_init__(self) -> None:
         if self.container_runner is None:
@@ -226,6 +229,7 @@ class RepairStateMachine:
         self._pending_patch: PatchProposal | None = None
         self._pending_attempt_index: int | None = None
         self._baseline_ast_hash: str | None = None
+        self._source_workspace: Path | None = self.source_workspace_override
 
     # ------------------------------------------------------------------
     # Public API
@@ -233,7 +237,19 @@ class RepairStateMachine:
 
     def start_run(self) -> str:
         """Create a new run in INIT state and return its run_id."""
-        return self._store.create_run(self.spec.case_id, self.max_attempts)
+        spec_json = {
+            "case_id": self.spec.case_id,
+            "repo_url": self.spec.repo_url,
+            "base_commit": self.spec.base_commit,
+            "test_command": self.spec.test_command,
+            "allowed_edit_paths": list(self.spec.allowed_edit_paths),
+            "failing_test_ids": list(self.spec.failing_test_ids),
+            "created_at": self.spec.created_at.isoformat(),
+            "metadata": [[k, v] for k, v in self.spec.metadata],
+        }
+        return self._store.create_run(
+            self.spec.case_id, self.max_attempts, spec_json=spec_json
+        )
 
     def resume_run(self, run_id: str) -> RunRecord:
         """Load an existing run from SQLite to continue it after a crash."""
@@ -485,13 +501,9 @@ class RepairStateMachine:
             shutil.rmtree(baseline_ws, ignore_errors=True)
 
     def _get_source_workspace(self) -> Path:
-        """Resolve the baseline source workspace.
-
-        The machine expects ``self.spec`` to have been constructed against a
-        local checkout that exists on disk alongside the orchestrator. We
-        expose ``source_workspace`` as an overridable attribute; if not set
-        we fall back to ``Path.cwd()``.
-        """
+        """Resolve the baseline source workspace."""
+        if self._source_workspace is not None:
+            return self._source_workspace
         return getattr(self, "source_workspace", Path.cwd())
 
     # ---- propose ----
@@ -868,7 +880,7 @@ class RepairStateMachine:
 
         if result.passed:
             # Success! Enter approval gate
-            image_digest = getattr(self.container_runner, "config", ContainerConfig()).image
+            image_digest = self.image_digest
             post_patch_hash = _sha256(result.stdout, result.stderr, str(result.exit_code))
             approval_hash = _sha256(
                 patch.diff_hash,
@@ -904,6 +916,15 @@ class RepairStateMachine:
                     ),
                 )
             self._pending_approval_binding = approval_record
+            # Auto-approve hook (benchmark mode): bypass human review.
+            if self.auto_approve_on_fix:
+                self.approve_run(
+                    run_id=run_id,
+                    approver_id="benchmark-auto-approve",
+                    expected_diff_hash=patch.diff_hash,
+                    expected_image_digest=image_digest,
+                    expected_post_patch_result_hash=post_patch_hash,
+                )
             return
 
         # Test failure (or harness broken)

@@ -1,0 +1,10 @@
+diff --git a/config.py b/config.py
+index 1dc0e48..006d20b 100644
+--- a/config.py
++++ b/config.py
+@@ -4,4 +4,4 @@ treats legitimate 0/False/'' as missing.
+ 
+ 
+ def get_timeout(value: int | None, default: int = 30) -> int:
+-    return value or default
++    return default if value is None else value
