@@ -98,6 +98,21 @@ class CaseSpec:
         if not self.created_at.tzinfo:
             raise ValueError("created_at must be timezone-aware (UTC)")
 
+        # Validate and canonicalize metadata (lexicographical sorting & duplicate rejection)
+        seen_keys: set[str] = set()
+        for item in self.metadata:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise ValueError(
+                    f"metadata items must be (key, value) pairs, got {item!r}"
+                )
+            k, _ = item
+            if k in seen_keys:
+                raise ValueError(f"Duplicate metadata key detected: {k!r}")
+            seen_keys.add(k)
+
+        sorted_meta = tuple(sorted(self.metadata, key=lambda kv: kv[0]))
+        object.__setattr__(self, "metadata", sorted_meta)
+
 
 # ---------------------------------------------------------------------------
 # PatchProposal — a candidate patch from the repair agent
