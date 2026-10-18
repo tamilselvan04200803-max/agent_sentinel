@@ -1,0 +1,8 @@
+{
+  "case_id": "case_02_boundary_off_by_one",
+  "repo_url": "local://fixture",
+  "base_commit": "0000000000000000000000000000000000000002",
+  "test_command": "pytest",
+  "allowed_edit_paths": ["paginator.py"],
+  "failing_test_ids": ["test_paginator.py::test_exact_pages", "test_paginator.py::test_partial_last_page"]
+}

@@ -74,6 +74,8 @@ class TerminationReason(StrEnum):
     DUPLICATE_PATCH = "DUPLICATE_PATCH"
     INFRASTRUCTURE_FAILURE = "INFRASTRUCTURE_FAILURE"
     HUMAN_REJECTED = "HUMAN_REJECTED"
+    REJECTED_BY_REVIEWER = "REJECTED_BY_REVIEWER"
+    FIX_VERIFIED = "FIX_VERIFIED"
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +119,7 @@ class RunRecord:
     approval_record: dict[str, Any] | None
     created_at_utc: str
     updated_at_utc: str
+    spec_json: dict[str, Any] | None = None
 
 
 _SCHEMA = """
@@ -132,7 +135,8 @@ CREATE TABLE IF NOT EXISTS runs (
     seen_ast_hashes_json TEXT NOT NULL DEFAULT '[]',
     approval_record_json TEXT,
     created_at_utc      TEXT NOT NULL,
-    updated_at_utc      TEXT NOT NULL
+    updated_at_utc      TEXT NOT NULL,
+    spec_json           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
@@ -176,6 +180,12 @@ class CheckpointStore:
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._conn.executescript(_SCHEMA)
+        # Migration for databases created before M6 persisted CaseSpec.
+        cols = {
+            str(r[1]) for r in self._conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "spec_json" not in cols:
+            self._conn.execute("ALTER TABLE runs ADD COLUMN spec_json TEXT")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -195,7 +205,12 @@ class CheckpointStore:
     # Run creation / retrieval
     # ------------------------------------------------------------------
 
-    def create_run(self, case_id: str, max_attempts: int) -> str:
+    def create_run(
+        self,
+        case_id: str,
+        max_attempts: int,
+        spec_json: dict[str, Any] | None = None,
+    ) -> str:
         """Create a new run row in INIT state and return its run_id."""
         run_id = uuid.uuid4().hex
         now = _now_iso()
@@ -204,8 +219,8 @@ class CheckpointStore:
                 """
                 INSERT INTO runs (run_id, case_id, state, termination_reason,
                                   attempts_used, max_attempts, created_at_utc,
-                                  updated_at_utc)
-                VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+                                  updated_at_utc, spec_json)
+                VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -215,6 +230,7 @@ class CheckpointStore:
                     max_attempts,
                     now,
                     now,
+                    _dumps(spec_json) if spec_json is not None else None,
                 ),
             )
         return run_id
@@ -388,6 +404,21 @@ class CheckpointStore:
                 ),
             )
 
+    def get_attempts(self, run_id: str) -> list[AttemptRecord]:
+        """Return all attempts for a run ordered by attempt_index."""
+        cur = self._conn.execute(
+            """
+            SELECT run_id, attempt_index, status, proposal_json, usage_json,
+                   cost_usd, error_type, error_detail, execution_result_json,
+                   diff_hash, ast_hash, timestamp_utc
+              FROM attempts
+             WHERE run_id = ?
+             ORDER BY attempt_index ASC
+            """,
+            (run_id,),
+        )
+        return [_row_to_attempt_record(r) for r in cur.fetchall()]
+
     def record_attempt_outcome(
         self,
         run_id: str,
@@ -425,8 +456,60 @@ class CheckpointStore:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class AttemptRecord:
+    """In-memory view of an ``attempts`` row."""
+
+    run_id: str
+    attempt_index: int
+    status: AttemptStatus
+    proposal_json: dict[str, Any] | None
+    usage_json: dict[str, Any] | None
+    cost_usd: float | None
+    error_type: str | None
+    error_detail: str | None
+    execution_result_json: dict[str, Any] | None
+    diff_hash: str | None
+    ast_hash: str | None
+    timestamp_utc: str
+
+
+def _row_to_attempt_record(row: sqlite3.Row | tuple[Any, ...]) -> AttemptRecord:
+    (
+        run_id,
+        attempt_index,
+        status,
+        proposal_json,
+        usage_json,
+        cost_usd,
+        error_type,
+        error_detail,
+        execution_result_json,
+        diff_hash,
+        ast_hash,
+        timestamp_utc,
+    ) = tuple(row)
+    return AttemptRecord(
+        run_id=str(run_id),
+        attempt_index=int(attempt_index),
+        status=AttemptStatus(status),
+        proposal_json=cast("dict[str, Any] | None", _loads(proposal_json)),
+        usage_json=cast("dict[str, Any] | None", _loads(usage_json)),
+        cost_usd=float(cost_usd) if cost_usd is not None else None,
+        error_type=None if error_type is None else str(error_type),
+        error_detail=None if error_detail is None else str(error_detail),
+        execution_result_json=cast(
+            "dict[str, Any] | None", _loads(execution_result_json)
+        ),
+        diff_hash=None if diff_hash is None else str(diff_hash),
+        ast_hash=None if ast_hash is None else str(ast_hash),
+        timestamp_utc=str(timestamp_utc),
+    )
+
+
 def _row_to_run_record(row: sqlite3.Row | tuple[Any, ...]) -> RunRecord:
     # sqlite3.Row supports indexing; plain tuple from connect() without row_factory
+    values = tuple(row)
     (
         run_id,
         case_id,
@@ -440,7 +523,8 @@ def _row_to_run_record(row: sqlite3.Row | tuple[Any, ...]) -> RunRecord:
         approval_record_json,
         created_at_utc,
         updated_at_utc,
-    ) = tuple(row)
+    ) = values[:12]
+    spec_json = values[12] if len(values) > 12 else None
     return RunRecord(
         run_id=run_id,
         case_id=case_id,
@@ -460,10 +544,12 @@ def _row_to_run_record(row: sqlite3.Row | tuple[Any, ...]) -> RunRecord:
         approval_record=cast("dict[str, Any] | None", _loads(approval_record_json)),
         created_at_utc=created_at_utc,
         updated_at_utc=updated_at_utc,
+        spec_json=cast("dict[str, Any] | None", _loads(spec_json)),
     )
 
 
 __all__ = [
+    "AttemptRecord",
     "AttemptStatus",
     "CheckpointStore",
     "RunRecord",

@@ -23,6 +23,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[project.scripts]
+agentsentinel = "agentsentinel.cli.main:cli_entrypoint"
+
 # ---------------------------------------------------------------------------
 # ruff — strict linting & formatting
 # ---------------------------------------------------------------------------
