@@ -102,37 +102,31 @@ class TestAdversarialM1ContainerSecurity:
         """Verify that an infinite loop / hanging process triggers wall-clock
         timeout AND the bounded streaming reader does NOT buffer unlimited
         output before the timeout fires (anti-host-OOM guarantee)."""
-        import contextlib as _ctx
-        import os as _os
-        import select as _select
 
         runner = HardenedContainerRunner(ContainerConfig(timeout_seconds=0.2))
 
+        import threading as _threading
+
         class _HangPipe:
             def __init__(self) -> None:
-                self._r, self._w = _os.pipe()
-                self._killed = False
+                self._killed_event = _threading.Event()
 
             def read(self, size: int) -> bytes:
-                if self._killed:
-                    return b""
-                while not self._killed:
-                    ready, _, _ = _select.select([self._r], [], [], 0.1)
-                    if ready:
-                        return _os.read(self._r, size)
+                self._killed_event.wait()
                 return b""
 
+            @property
+            def _killed(self) -> bool:
+                return self._killed_event.is_set()
+
             def fileno(self) -> int:
-                return self._r
+                return -1
 
             def kill(self) -> None:
-                self._killed = True
-                with _ctx.suppress(OSError):
-                    _os.close(self._w)
+                self._killed_event.set()
 
             def close(self) -> None:
-                with _ctx.suppress(OSError):
-                    _os.close(self._r)
+                self._killed_event.set()
 
         out_pipe = _HangPipe()
         err_pipe = _HangPipe()

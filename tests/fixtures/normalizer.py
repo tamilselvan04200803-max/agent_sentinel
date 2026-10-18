@@ -87,7 +87,7 @@ if __name__ == "__main__":
 
 NORMALIZER_PATCH_DIFF = """--- a/normalizer.py
 +++ b/normalizer.py
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
  \"\"\"Normalizer module.\"\"\"
 +import re
 

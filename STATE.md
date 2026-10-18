@@ -1,8 +1,8 @@
 # AGENTSENTINEL EXECUTION STATE
 
 - **Current Active Milestone:** M4 (Bounded Repair State Machine)
-- **Current Sub-Task:** IN PROGRESS — Orchestrator, dedup, checkpoint, state machine
-- **Milestone Gate Status:** PRE-VERIFICATION
+- **Current Sub-Task:** COMPLETE — Orchestrator, dedup, checkpoint, state machine, adversarial & regression suites
+- **Milestone Gate Status:** VERIFIED_READY_FOR_REVIEW
 
 ## Completed & Verified Components
 
@@ -14,16 +14,22 @@
 | `src/agentsentinel/orchestrator/dedup.py` | Tier-1 canonical diff fingerprint (strips index/headers/CRLF, SHA-256); Tier-2 Python AST equivalence fingerprint across `allowed_edit_paths` (catches comment/whitespace-only no-op patches and semantically-identical duplicates before Docker spins up) |
 | `src/agentsentinel/orchestrator/checkpoint.py` | Durable SQLite store with WAL/NORMAL/foreign_keys; `runs` + `attempts` tables; atomic state transitions; supports crash recovery by reloading `(run_id, attempts_used, seen_diff_hashes, seen_ast_hashes)` |
 | `src/agentsentinel/orchestrator/state_machine.py` | Full 8-invariant `RepairStateMachine`: baseline reproduction gate, attempt accounting (429/Docker failures terminate as INFRASTRUCTURE_FAILURE without consuming an attempt), Tier-1+Tier-2 dedup BEFORE container run, fresh workspace per attempt, feedback loop into next prompt, cryptographic approval binding, export gate |
+| `tests/unit/test_m4_state_machine.py` | Invariant tests for 8 state machine rules including baseline gate, crash recovery, dedup, attempt limits, feedback loop, approval binding, and export gate |
+| `tests/adversarial/test_adversarial_m4.py` | Adversarial test suite for M4 orchestrator resilience |
+| `tests/unit/test_audit_regressions.py` | Comprehensive regression suite for M0-M3 audits |
 
-## Pre-M4 Applier Fix — Verified
-- `tests/unit/test_premark_applier.py` proves:
+## Verification Evidence
+- Full Test Suite: **281 passed, 1 skipped** in 18.03s.
+- Linter: `python -m ruff check src tests` (All checks passed, 0 errors).
+- Typecheck: `python -m mypy --strict src` (Success: no issues found in 23 source files).
+- Pre-M4 Applier Fix:
   - `git apply` works after `scrub_git_history` removes `.git/`.
   - Bad-context diffs raise `PatchApplicationError` directly from `apply_validated_patch` (no silent fallback).
   - `PatchApplicationError` is a subclass of `AgentSentinelError`.
-- Existing `test_applier.py` suite continues to pass (11/11).
+- Live Docker Tests: All 6 integration tests passing live with pre-baked `agentsentinel-runner:py311` image.
 
 ## Active Blockers / Pending Human Verification
-- M4 unit & adversarial tests are being added now; awaiting full pytest run.
+- None. Milestone 4 is complete, verified, and passing all quality gates. Ready for human sign-off.
 
 ## Architectural Decision Log (ADR)
 *(Previous M0–M3 entries retained.)*
