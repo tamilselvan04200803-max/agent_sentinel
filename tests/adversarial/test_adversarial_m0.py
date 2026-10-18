@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
-from datetime import datetime, timezone
-from types import MappingProxyType
+from datetime import UTC, datetime
 
 import pytest
 
@@ -26,12 +25,13 @@ from agentsentinel.domain.exit_codes import ExitCode, classify, is_harness_broke
 from agentsentinel.domain.models import CaseSpec, ExecutionResult, PatchProposal
 
 VALID_SHA = "a" * 40
-VALID_DT = datetime(2026, 1, 1, tzinfo=timezone.utc)
+VALID_DT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
 # 1. Path traversal / injection in CaseSpec fields
 # ---------------------------------------------------------------------------
+
 
 class TestPathTraversalInputs:
     """CaseSpec must be constructible with traversal strings in allowed_edit_paths
@@ -43,7 +43,7 @@ class TestPathTraversalInputs:
         "../../etc/passwd",
         "..\\..\\windows\\system32\\cmd.exe",
         "%2e%2e%2f%2e%2e%2fetc%2fshadow",
-        "\x00/etc/passwd",          # null-byte injection
+        "\x00/etc/passwd",  # null-byte injection
         "src/" + "a/" * 1000 + "f.py",  # very deep path
     ]
 
@@ -76,6 +76,7 @@ class TestPathTraversalInputs:
 # ---------------------------------------------------------------------------
 # 2. Malformed / oversized diffs
 # ---------------------------------------------------------------------------
+
 
 class TestMalformedDiffs:
     @pytest.mark.adversarial
@@ -140,21 +141,21 @@ class TestMalformedDiffs:
 # 3. Exit code adversarial inputs
 # ---------------------------------------------------------------------------
 
+
 class TestExitCodeAdversarial:
     @pytest.mark.adversarial
     @pytest.mark.parametrize(
         "tricky_code",
         [
-            5,    # NO_TESTS_COLLECTED — must NOT pass the reward-hacking guard
-            3,    # INTERNAL_ERROR
-            2,    # INTERRUPTED
-            4,    # USAGE_ERROR
+            5,  # NO_TESTS_COLLECTED — must NOT pass the reward-hacking guard
+            3,  # INTERNAL_ERROR
+            2,  # INTERRUPTED
+            4,  # USAGE_ERROR
         ],
     )
     def test_non_verdict_codes_are_harness_broken(self, tricky_code: int) -> None:
         assert is_harness_broken(tricky_code) is True, (
-            f"Exit code {tricky_code} must be treated as a broken harness, "
-            "not a pass/fail verdict"
+            f"Exit code {tricky_code} must be treated as a broken harness, not a pass/fail verdict"
         )
 
     @pytest.mark.adversarial
@@ -177,6 +178,7 @@ class TestExitCodeAdversarial:
 # ---------------------------------------------------------------------------
 # 4. Symlink and allowlist edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestSymlinkAndAllowlist:
     @pytest.mark.adversarial
@@ -206,6 +208,7 @@ class TestSymlinkAndAllowlist:
 # 5. Test file modification reward-hacking guard
 # ---------------------------------------------------------------------------
 
+
 class TestRewardHackingGuard:
     TEST_PATHS = [
         "tests/test_broken.py",
@@ -227,6 +230,7 @@ class TestRewardHackingGuard:
 # ---------------------------------------------------------------------------
 # 6. ExecutionResult adversarial
 # ---------------------------------------------------------------------------
+
 
 class TestExecutionResultAdversarial:
     @pytest.mark.adversarial

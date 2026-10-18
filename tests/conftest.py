@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from agentsentinel.domain.exit_codes import ExitCode
 from agentsentinel.domain.models import CaseSpec, ExecutionResult, PatchProposal
-
 
 VALID_SHA = "a" * 40  # 40-char hex SHA
 
@@ -23,7 +22,7 @@ def valid_case_spec() -> CaseSpec:
         test_command="pytest tests/",
         allowed_edit_paths=("src/module.py",),
         failing_test_ids=("tests/test_module.py::test_broken",),
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
         metadata=(("language", "python"),),
     )
 
@@ -37,7 +36,7 @@ def valid_patch(valid_case_spec: CaseSpec) -> PatchProposal:
         model_id="gemini-2.5-pro",
         prompt_tokens=100,
         completion_tokens=50,
-        proposed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 

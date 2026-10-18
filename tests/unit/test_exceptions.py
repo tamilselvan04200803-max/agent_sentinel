@@ -19,10 +19,10 @@ from agentsentinel.domain.exceptions import (
     TestFileModificationError,
 )
 
-
 # ---------------------------------------------------------------------------
 # Hierarchy correctness
 # ---------------------------------------------------------------------------
+
 
 class TestExceptionHierarchy:
     @pytest.mark.unit
@@ -66,6 +66,7 @@ class TestExceptionHierarchy:
 # ---------------------------------------------------------------------------
 # Exception messages & structured fields
 # ---------------------------------------------------------------------------
+
 
 class TestExceptionMessages:
     @pytest.mark.unit
@@ -137,6 +138,7 @@ class TestExceptionMessages:
 # ---------------------------------------------------------------------------
 # Catchability via base class
 # ---------------------------------------------------------------------------
+
 
 class TestCatchability:
     @pytest.mark.unit

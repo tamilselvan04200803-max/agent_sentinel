@@ -5,18 +5,18 @@ from __future__ import annotations
 import pytest
 
 from agentsentinel.domain.exit_codes import (
-    ExitCode,
     HARNESS_BROKEN_CODES,
     VERDICT_CODES,
+    ExitCode,
     classify,
     is_genuine_verdict,
     is_harness_broken,
 )
 
-
 # ---------------------------------------------------------------------------
 # ExitCode enum correctness
 # ---------------------------------------------------------------------------
+
 
 class TestExitCodeValues:
     """Verify every exit code maps to the correct pytest integer."""
@@ -57,6 +57,7 @@ class TestExitCodeValues:
 # classify()
 # ---------------------------------------------------------------------------
 
+
 class TestClassify:
     @pytest.mark.unit
     @pytest.mark.parametrize("raw", [0, 1, 2, 3, 4, 5])
@@ -75,6 +76,7 @@ class TestClassify:
 # ---------------------------------------------------------------------------
 # is_harness_broken / is_genuine_verdict
 # ---------------------------------------------------------------------------
+
 
 class TestClassificationPredicates:
     @pytest.mark.unit
@@ -108,4 +110,4 @@ class TestClassificationPredicates:
     @pytest.mark.unit
     def test_sets_cover_all_codes(self) -> None:
         all_codes = frozenset(ExitCode)
-        assert HARNESS_BROKEN_CODES | VERDICT_CODES == all_codes
+        assert all_codes == HARNESS_BROKEN_CODES | VERDICT_CODES

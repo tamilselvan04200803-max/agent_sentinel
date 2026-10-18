@@ -20,19 +20,19 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from agentsentinel.domain.exit_codes import ExitCode
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _utcnow() -> datetime:
     """Return the current UTC-aware datetime."""
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _sha256_of(data: str) -> str:
@@ -43,6 +43,7 @@ def _sha256_of(data: str) -> str:
 # ---------------------------------------------------------------------------
 # CaseSpec — the bug case descriptor
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class CaseSpec:
@@ -88,9 +89,7 @@ class CaseSpec:
         if len(self.base_commit) != 40 or not all(  # noqa: PLR2004
             c in "0123456789abcdefABCDEF" for c in self.base_commit
         ):
-            raise ValueError(
-                f"base_commit must be a 40-char hex SHA, got {self.base_commit!r}"
-            )
+            raise ValueError(f"base_commit must be a 40-char hex SHA, got {self.base_commit!r}")
         if not self.allowed_edit_paths:
             raise ValueError("allowed_edit_paths must be non-empty")
         if not self.failing_test_ids:
@@ -102,9 +101,7 @@ class CaseSpec:
         seen_keys: set[str] = set()
         for item in self.metadata:
             if not isinstance(item, tuple) or len(item) != 2:
-                raise ValueError(
-                    f"metadata items must be (key, value) pairs, got {item!r}"
-                )
+                raise ValueError(f"metadata items must be (key, value) pairs, got {item!r}")
             k, _ = item
             if k in seen_keys:
                 raise ValueError(f"Duplicate metadata key detected: {k!r}")
@@ -117,6 +114,7 @@ class CaseSpec:
 # ---------------------------------------------------------------------------
 # PatchProposal — a candidate patch from the repair agent
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class PatchProposal:
@@ -166,6 +164,7 @@ class PatchProposal:
 # ---------------------------------------------------------------------------
 # ExecutionResult — output from a sandbox run
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class ExecutionResult:
@@ -230,6 +229,7 @@ class ExecutionResult:
 # EvidenceBundle — the final audit record
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class EvidenceBundle:
     """Immutable audit record emitted at the conclusion of a repair attempt.
@@ -281,9 +281,7 @@ class EvidenceBundle:
 
     def __post_init__(self) -> None:
         if self.baseline_result.exit_code == ExitCode.OK:
-            raise ValueError(
-                "baseline_result must NOT be OK — the baseline must reproduce the bug"
-            )
+            raise ValueError("baseline_result must NOT be OK — the baseline must reproduce the bug")
         if self.attempts < 1:
             raise ValueError(f"attempts must be ≥ 1, got {self.attempts}")
         if self.total_prompt_tokens < 0 or self.total_completion_tokens < 0:
@@ -293,9 +291,7 @@ class EvidenceBundle:
                 "case_id": self.case_id,
                 "baseline_exit_code": int(self.baseline_result.exit_code),
                 "final_exit_code": int(self.final_result.exit_code),
-                "patch_hash": self.accepted_patch.diff_hash
-                if self.accepted_patch
-                else None,
+                "patch_hash": self.accepted_patch.diff_hash if self.accepted_patch else None,
                 "attempts": self.attempts,
             },
             sort_keys=True,
