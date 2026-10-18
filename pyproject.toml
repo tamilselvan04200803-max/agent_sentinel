@@ -74,6 +74,11 @@ addopts = [
     "--strict-markers",
     "--tb=short",
     "-v",
+    "-p", "no:schemathesis",
+    "--import-mode=importlib",
+]
+filterwarnings = [
+    "ignore:cannot collect test class 'TestFileModificationError'.*:pytest.PytestCollectionWarning",
 ]
 markers = [
     "adversarial: marks tests as adversarial/security tests (deselect with '-m not adversarial')",

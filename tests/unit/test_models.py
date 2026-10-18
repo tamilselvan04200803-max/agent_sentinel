@@ -102,6 +102,50 @@ class TestCaseSpec:
         s = {valid_case_spec}
         assert valid_case_spec in s
 
+    @pytest.mark.unit
+    def test_metadata_canonicalization_and_hash_equality(self) -> None:
+        """Two CaseSpec instances with reversed metadata keys must produce identical hash() and equal comparison."""
+        dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        spec1 = CaseSpec(
+            case_id="case-1",
+            repo_url="https://example.com/repo",
+            base_commit=VALID_SHA,
+            test_command="pytest",
+            allowed_edit_paths=("src/file.py",),
+            failing_test_ids=("tests/test_file.py::test_fn",),
+            created_at=dt,
+            metadata=(("b_key", "val_b"), ("a_key", "val_a"), ("c_key", "val_c")),
+        )
+        spec2 = CaseSpec(
+            case_id="case-1",
+            repo_url="https://example.com/repo",
+            base_commit=VALID_SHA,
+            test_command="pytest",
+            allowed_edit_paths=("src/file.py",),
+            failing_test_ids=("tests/test_file.py::test_fn",),
+            created_at=dt,
+            metadata=(("c_key", "val_c"), ("a_key", "val_a"), ("b_key", "val_b")),
+        )
+        assert spec1.metadata == (("a_key", "val_a"), ("b_key", "val_b"), ("c_key", "val_c"))
+        assert spec1 == spec2
+        assert hash(spec1) == hash(spec2)
+        assert len({spec1, spec2}) == 1
+
+    @pytest.mark.unit
+    def test_metadata_duplicate_key_rejected(self) -> None:
+        dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with pytest.raises(ValueError, match="Duplicate metadata key"):
+            CaseSpec(
+                case_id="case-1",
+                repo_url="https://example.com/repo",
+                base_commit=VALID_SHA,
+                test_command="pytest",
+                allowed_edit_paths=("src/file.py",),
+                failing_test_ids=("tests/test_file.py::test_fn",),
+                created_at=dt,
+                metadata=(("dup_key", "val1"), ("dup_key", "val2")),
+            )
+
 
 # ---------------------------------------------------------------------------
 # PatchProposal
