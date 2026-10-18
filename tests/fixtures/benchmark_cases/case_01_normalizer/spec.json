@@ -1,0 +1,8 @@
+{
+  "case_id": "case_01_normalizer",
+  "repo_url": "local://fixture",
+  "base_commit": "0000000000000000000000000000000000000001",
+  "test_command": "pytest",
+  "allowed_edit_paths": ["normalizer.py"],
+  "failing_test_ids": ["test_normalize.py::test_normalize_strips_whitespace"]
+}
