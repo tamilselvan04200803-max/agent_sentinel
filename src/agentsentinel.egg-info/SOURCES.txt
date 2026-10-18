@@ -16,3 +16,5 @@ src/agentsentinel/llm/__init__.py
 src/agentsentinel/orchestrator/__init__.py
 src/agentsentinel/policy/__init__.py
 src/agentsentinel/sandbox/__init__.py
+src/agentsentinel/sandbox/container.py
+src/agentsentinel/sandbox/workspace.py

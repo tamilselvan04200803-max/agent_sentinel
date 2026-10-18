@@ -75,7 +75,7 @@ class TestHardenedContainerRunner:
         assert "--cpus=1.0" in args
 
         # 6. Mounted workspace
-        host_resolved = str(tmp_path.resolve())
+        host_resolved = tmp_path.resolve().as_posix()
         mount_arg = f"{host_resolved}:/workspace:rw"
         assert "-v" in args
         assert mount_arg in args
