@@ -20,13 +20,16 @@
 | `STATE.md` | Continuous context anchor and ADR record | Maintained on every step |
 
 **Milestone Verification Evidence:**
-- **M1 Live Docker Hardening Status:** `VERIFIED`
-  - Container naming: `--name agentsentinel-<hex>`.
+- **M1 Live Docker Hardening Status:** `VERIFIED_LIVE_DOCKER`
+  - Real Docker Daemon Execution: All 4 live integration tests in `tests/integration/test_docker_live_m1.py` passed against Docker Desktop 29.4.1 (WSL2 kernel 6.6.87.2).
+  - Normalizer bug reproduction: Fails in container with `ExitCode.TESTS_FAILED` (`failed=True`).
+  - Normalizer fix verification: Passes in container with `ExitCode.OK` (`passed=True`).
+  - Network isolation: Outbound socket connect fails (`OSError: [Errno 101] Network is unreachable`).
+  - Host timeout & reaper: Subprocess timeout terminates container cleanly; `docker ps -a` confirms 0 residual `agentsentinel-*` containers.
   - Windows mount normalization: `workspace_host_path.resolve().as_posix()`.
-  - Pytest cache isolation: `-e PYTEST_ADDOPTS=-o cache_dir=/tmp/.pytest_cache`.
-  - Integration suite: [`tests/integration/test_docker_live_m1.py`](file:///c:/Users/tamil/Downloads/agentsenitnel/agent_sentinel/tests/integration/test_docker_live_m1.py).
+  - Cache isolation on `--read-only`: `-e PYTEST_ADDOPTS=-o cache_dir=/tmp/.pytest_cache`.
 - **M2 Verification Status:** `VERIFIED_READY_FOR_REVIEW`
-  - Test Suite: 168 passed, 5 skipped (4 integration when daemon offline, 1 Windows symlink privilege check) in 1.16s.
+  - Full Test Suite: 172 passed, 1 skipped (Windows unprivileged symlink test) in 4.67s.
   - Linter: `ruff check src tests` (All checks passed).
   - Typecheck: `mypy --strict src` (Success: no issues found in 15 source files).
 
