@@ -212,7 +212,7 @@ class TestOpenAICompatibleClientErrorHandling:
     @pytest.mark.unit
     def test_rate_limit_exhausted_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AGENTSENTINEL_LLM_API_KEY", "test-key-123")
-        client = OpenAICompatibleClient(max_retries=0)  # no retries
+        client = OpenAICompatibleClient(max_rate_limit_retries=0)  # no retries
 
         import urllib.error
         from io import BytesIO

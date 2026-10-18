@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +16,64 @@ from agentsentinel.sandbox.container import ContainerConfig, HardenedContainerRu
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _make_mock_proc(stdout: bytes, stderr: bytes, returncode: int) -> MagicMock:
+    """Build a MagicMock ``subprocess.Popen`` whose stdout/stderr are BytesIO
+    streams that behave like closed pipes (EOF immediately) for the thread-based
+    streaming reader.
+    """
+    proc = MagicMock()
+    proc.stdout = io.BytesIO(stdout)
+    proc.stderr = io.BytesIO(stderr)
+    proc.returncode = returncode
+    proc.poll.return_value = returncode
+    proc.kill.return_value = None
+    proc.wait.return_value = returncode
+    return proc
+
+
+class _SlowPipe:
+    """A readable file-like that blocks on read() until killed or timeout.
+
+    Used to simulate an infinitely-running child whose pipes never close and
+    never produce data, so we can verify the bounded-stream reader enforces
+    the wall-clock timeout.
+    """
+
+    def __init__(self) -> None:
+        self._r, self._w = os.pipe()
+        self._killed = False
+
+    def read(self, size: int) -> bytes:
+        if self._killed:
+            return b""
+        # Block on select for up to 0.1 seconds; time out and return empty
+        # *only* when killed. This simulates a pipe that never produces data
+        # until the writer is closed via kill().
+        import select
+
+        while not self._killed:
+            ready, _, _ = select.select([self._r], [], [], 0.1)
+            if ready:
+                # Data/EOF available on the real fd
+                data = os.read(self._r, size)
+                return data
+        return b""
+
+    def fileno(self) -> int:
+        return self._r
+
+    def close(self) -> None:
+        with contextlib.suppress(OSError):
+            os.close(self._r)
+        with contextlib.suppress(OSError):
+            os.close(self._w)
+
+    def kill(self) -> None:
+        self._killed = True
+        with contextlib.suppress(OSError):
+            os.close(self._w)
 
 
 class TestContainerConfig:
@@ -88,10 +149,7 @@ class TestHardenedContainerRunner:
     def test_run_in_container_success_mock(self, tmp_path: Path) -> None:
         runner = HardenedContainerRunner()
 
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (b"1 passed in 0.05s", b"")
-        mock_proc.returncode = 0
-        mock_proc.poll.return_value = 0
+        mock_proc = _make_mock_proc(b"1 passed in 0.05s", b"", returncode=0)
 
         with patch("subprocess.Popen", return_value=mock_proc):
             res = runner.run_in_container(
@@ -110,12 +168,37 @@ class TestHardenedContainerRunner:
 
     @pytest.mark.unit
     def test_run_in_container_timeout_triggers_cleanup(self, tmp_path: Path) -> None:
-        import subprocess
+        """Verify wall-clock timeout fires even when the container never
+        closes its pipes (i.e. bounded streaming reader does not deadlock
+        waiting for EOF)."""
+        runner = HardenedContainerRunner(ContainerConfig(timeout_seconds=0.2))
 
-        runner = HardenedContainerRunner(ContainerConfig(timeout_seconds=0.1))
+        out_pipe = _SlowPipe()
+        err_pipe = _SlowPipe()
 
         mock_proc = MagicMock()
-        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="pytest", timeout=0.1)
+        mock_proc.stdout = out_pipe
+        mock_proc.stderr = err_pipe
+        mock_proc.pid = 12345
+        mock_proc.returncode = None
+
+        # poll() returns None (still running) until kill() is called.
+        poll_calls = {"n": 0}
+
+        def _poll() -> int | None:
+            poll_calls["n"] += 1
+            if out_pipe._killed:
+                return -9
+            return None
+
+        mock_proc.poll.side_effect = _poll
+
+        def _kill() -> None:
+            out_pipe.kill()
+            err_pipe.kill()
+
+        mock_proc.kill.side_effect = _kill
+        mock_proc.wait.return_value = -9
 
         with (
             patch("subprocess.Popen", return_value=mock_proc),
@@ -129,19 +212,19 @@ class TestHardenedContainerRunner:
                     command="python -c 'while True: pass'",
                 )
 
-            assert exc_info.value.timeout_seconds == 0.1
-            mock_proc.kill.assert_called()
+            assert exc_info.value.timeout_seconds == 0.2
             mock_rm.assert_called()
+            mock_proc.kill.assert_called()
+
+        out_pipe.close()
+        err_pipe.close()
 
     @pytest.mark.unit
     def test_run_in_container_output_truncation(self, tmp_path: Path) -> None:
         runner = HardenedContainerRunner(ContainerConfig(max_output_bytes=100))
 
         flooded_bytes = b"A" * 1000
-        mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (flooded_bytes, b"")
-        mock_proc.returncode = 1
-        mock_proc.poll.return_value = 1
+        mock_proc = _make_mock_proc(flooded_bytes, b"", returncode=1)
 
         with patch("subprocess.Popen", return_value=mock_proc):
             res = runner.run_in_container(

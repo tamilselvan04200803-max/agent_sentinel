@@ -3,22 +3,31 @@
 Takes a validated ``PatchProposal`` and applies it to a fresh ephemeral workspace
 snapshot, producing a patched workspace path ready for container-based test execution.
 
-Security invariants:
+Security & correctness invariants
+---------------------------------
 - The unified diff is parsed and validated through the full M2 policy stack
   before being written to disk (prevent TOCTOU).
+- Patch applicability is verified with ``git apply --check --ignore-space-change``
+  executed natively against the ephemeral workspace. If the check fails we raise
+  :class:`PatchApplicationError` immediately — we NEVER silently fall back to a
+  permissive line-editor when ``git`` rejects the patch (that would silently
+  apply partial/corrupt hunks and produce non-deterministic workspace state).
+- If ``git`` is not available on the host we raise :class:`HarnessSetupError` —
+  ``git apply`` is the authoritative patch engine and the harness refuses to
+  run without it.
+- The patch file is written with ``encoding="utf-8", newline="\\n"`` to avoid
+  Windows CRLF translation corrupting the diff.
 - After application, every written path is re-validated against the workspace
-  root using ``is_relative_to`` to guard against symlink attacks in the diff
-  application phase itself.
-- A ``git apply --check`` dry-run is performed when git is available to verify
-  patch applicability before any file mutation.
+  root using ``is_relative_to`` to guard against symlink attacks.
 - All file writes go through atomic rename (``atomic_write``) to prevent partial
-  writes from leaving the workspace in a corrupt state.
+  writes from leaving the workspace corrupt.
 - The source (pre-patch) directory is never mutated; a deep copy is made first.
 """
 
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,7 +37,7 @@ from agentsentinel.domain.exceptions import (
     HarnessSetupError,
     SymlinkEscapeError,
 )
-from agentsentinel.policy.diff_parser import FilePatch, ParsedDiff, UnifiedDiffParser
+from agentsentinel.policy.diff_parser import ParsedDiff, UnifiedDiffParser
 from agentsentinel.policy.validator import PatchPolicyValidator
 from agentsentinel.sandbox.workspace import WorkspaceManager
 
@@ -37,105 +46,112 @@ if TYPE_CHECKING:
 
 
 class PatchApplicationError(HarnessSetupError):
-    """Raised when a validated patch cannot be applied to the workspace."""
+    """Raised when a validated patch cannot be applied to the workspace.
+
+    This includes ``git apply --check`` failures (context mismatch, corrupt
+    hunks, missing files), filesystem errors, and symlink-escape violations
+    discovered during application.
+    """
 
     def __init__(self, reason: str, stderr: str = "") -> None:
         super().__init__(reason, stderr)
 
 
-def _apply_file_patch(file_patch: FilePatch, workspace_root: Path) -> None:
-    """Apply a single FilePatch by line-editing the target file.
+def _write_patch_file(diff_text: str) -> str:
+    """Write a normalised unified diff to a temporary ``.patch`` file.
 
-    Supports additions (+), deletions (-), and context lines ( ).
-    New files are created, deleted files are removed.
+    Uses ``encoding="utf-8", newline="\\n"`` so Python on Windows does not
+    translate ``\\n`` → ``\\r\\n`` when writing to disk (a classic bug that
+    breaks ``git apply``).
 
-    Parameters
-    ----------
-    file_patch:
-        Parsed file patch to apply.
-    workspace_root:
-        Absolute path to the workspace root.
+    Returns the absolute path of the temporary patch file. Caller is
+    responsible for unlinking it.
+    """
+    normalised = diff_text.replace("\r\n", "\n").replace("\r", "\n")
+    fd, path = tempfile.mkstemp(suffix=".patch", prefix="agentsentinel_")
+    path_obj = Path(path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(normalised)
+    except Exception:
+        with contextlib.suppress(OSError):
+            path_obj.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def _git_apply(patch_file: str, workspace: Path, check_only: bool) -> tuple[bool, str]:
+    """Run ``git apply [--check] --ignore-space-change --whitespace=nowarn``.
+
+    Returns ``(succeeded, stderr_text)``. Raises :class:`FileNotFoundError` if
+    the ``git`` executable is not available on PATH (caller converts to
+    :class:`HarnessSetupError`).
+    """
+    cmd = [
+        "git",
+        "apply",
+        "--ignore-space-change",
+        "--whitespace=nowarn",
+    ]
+    if check_only:
+        cmd.append("--check")
+    cmd.append(patch_file)
+
+    result = subprocess.run(
+        cmd,
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+        check=False,
+    )
+    return result.returncode == 0, (result.stderr or result.stdout or "").strip()
+
+
+def _git_apply_with_fallback(
+    patch_file: str, workspace: Path
+) -> tuple[bool, str]:
+    """Verify patch applicability with ``git apply --check`` then apply it.
+
+    On ``--check`` failure we raise a descriptive error. On successful check
+    we run ``git apply`` (without ``--check``) to actually apply the patch.
+
+    Returns ``(True, "")`` on success.
 
     Raises
     ------
     PatchApplicationError
-        If the patch cannot be applied cleanly (context mismatch, missing file).
+        If either step fails — the error message includes git's stderr for
+        diagnostics to feed back to the LLM on the next attempt.
+    HarnessSetupError
+        If ``git`` is not installed.
     """
-    target = file_patch.target_path
-    if not target:
-        raise PatchApplicationError("FilePatch has no target path")
+    # 1. Dry-run verification
+    try:
+        ok, err = _git_apply(patch_file, workspace, check_only=True)
+    except FileNotFoundError as exc:
+        raise HarnessSetupError(
+            "git executable not found on host; git apply is required for "
+            "deterministic patch application. Install git and retry."
+        ) from exc
 
-    target_file = workspace_root / target
-
-    # Re-verify the resolved path is still inside the workspace after join
-    resolved_root = workspace_root.resolve()
-    resolved_target = target_file.resolve()
-    if not resolved_target.is_relative_to(resolved_root):
-        raise SymlinkEscapeError(
-            link=target,
-            resolved=str(resolved_target),
-            root=str(resolved_root),
+    if not ok:
+        raise PatchApplicationError(
+            "git apply --check rejected the patch (context mismatch, corrupt "
+            "hunks, or missing files). The patch was NOT applied.",
+            stderr=err,
         )
 
-    # Handle file deletions
-    if file_patch.is_delete:
-        if target_file.exists():
-            target_file.unlink()
-        return
-
-    # Read current file content (or empty for new files)
-    if file_patch.is_new:
-        original_lines: list[str] = []
-    else:
-        if not target_file.exists():
-            raise PatchApplicationError(
-                f"Source file does not exist for patching: {target!r}"
-            )
-        original_lines = target_file.read_text(encoding="utf-8", errors="replace").splitlines(
-            keepends=True
+    # 2. Actual application
+    ok, err = _git_apply(patch_file, workspace, check_only=False)
+    if not ok:
+        raise PatchApplicationError(
+            "git apply failed during actual application after passing --check. "
+            "Workspace may be in an inconsistent state.",
+            stderr=err,
         )
 
-    # Apply each hunk
-    result_lines = list(original_lines)
-    line_offset = 0  # Track cumulative offset from previous hunks
-
-    for hunk in file_patch.hunks:
-        # old_start is 1-indexed; convert to 0-indexed
-        apply_at = hunk.old_start - 1 + line_offset
-        old_count = hunk.old_count
-        new_lines: list[str] = []
-
-        # Verify context lines match
-        context_pos = apply_at
-        for hl in hunk.lines:
-            if hl.origin in (" ", "-"):
-                if context_pos >= len(result_lines):
-                    raise PatchApplicationError(
-                        f"Patch context mismatch in {target!r} at hunk line {context_pos + 1}: "
-                        f"file has fewer lines than expected"
-                    )
-                expected = result_lines[context_pos].rstrip("\n").rstrip("\r")
-                actual = hl.content.rstrip("\n").rstrip("\r")
-                if expected != actual:
-                    raise PatchApplicationError(
-                        f"Patch context mismatch in {target!r} at line {context_pos + 1}: "
-                        f"expected {expected!r}, got {actual!r}"
-                    )
-                context_pos += 1
-            if hl.origin in ("+", " "):
-                content = hl.content
-                if not content.endswith(("\n", "\r")):
-                    content += "\n"
-                new_lines.append(content)
-
-        # Splice the hunk into result_lines
-        result_lines[apply_at : apply_at + old_count] = new_lines
-        line_offset += len(new_lines) - old_count
-
-    # Write result atomically
-    mgr = WorkspaceManager()
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    mgr.atomic_write(target_file, "".join(result_lines))
+    return True, ""
 
 
 def apply_validated_patch(
@@ -146,10 +162,10 @@ def apply_validated_patch(
 ) -> Path:
     """Parse, validate, and apply a ``PatchProposal`` to a fresh workspace copy.
 
-    This is the main M2→M1 bridge: it takes a candidate patch from the LLM,
-    runs it through the full policy validation stack, then applies the hunks
-    to an isolated workspace snapshot, and verifies no symlink escapes occurred
-    post-application.
+    This is the M2→M1 bridge: it takes a candidate patch from the LLM,
+    runs it through the full policy validation stack, provisions an isolated
+    workspace snapshot, applies the patch via ``git apply`` (hard-failing on
+    any rejection), and verifies no symlink escapes occurred post-application.
 
     Parameters
     ----------
@@ -160,9 +176,9 @@ def apply_validated_patch(
     allowed_edit_paths:
         Allowlist of repo-relative paths the agent may modify (from ``CaseSpec``).
     dest_workspace:
-        If provided, apply the patch here (must already be populated). If ``None``,
-        a fresh ``TemporaryDirectory`` is created internally — the caller is
-        responsible for cleanup (the path is returned).
+        If provided, apply the patch here (must already be populated). If
+        ``None``, a fresh ``TemporaryDirectory`` is created internally — the
+        caller is responsible for cleanup (the path is returned).
 
     Returns
     -------
@@ -173,14 +189,14 @@ def apply_validated_patch(
     ------
     MalformedDiffError
         If the diff cannot be parsed.
-    PathTraversalError
-        If path traversal sequences are detected.
+    PathTraversalError / TestFileModificationError / AllowlistViolationError
+        If policy validation fails (raised by the validator).
     SymlinkEscapeError
         If a symlink resolves outside the workspace root post-application.
     PatchApplicationError
-        If a hunk cannot be applied cleanly (context mismatch).
+        If ``git apply --check`` or ``git apply`` rejects the patch.
     HarnessSetupError
-        If workspace copy fails.
+        If workspace copy fails or git is unavailable.
     """
     # Step 1: Parse the diff (raises MalformedDiffError on failure)
     parsed: ParsedDiff = UnifiedDiffParser.parse(patch.unified_diff)
@@ -195,23 +211,24 @@ def apply_validated_patch(
     if dest_workspace is not None:
         patched_ws = dest_workspace.resolve()
     else:
-        # Create a temp dir and copy source files in
+        # Create a temp dir and copy source files in. NOTE: scrub_git_history
+        # removes the entire .git directory (preventing future-fix leakage);
+        # git apply still works correctly against a plain working tree
+        # without a .git directory (verified behaviour).
         _tmp_dir = tempfile.mkdtemp(prefix="agentsentinel_patched_")
         patched_ws = Path(_tmp_dir)
         mgr.populate_from_directory(source_workspace, patched_ws)
         mgr.scrub_git_history(patched_ws)
 
-    # Step 4: Optional git apply --check dry-run
-    git_check_passed = _try_git_apply_check(patch.unified_diff, patched_ws)
-    if not git_check_passed:
-        # Fall through to manual application — git may not be available
-        pass
+    # Step 4: Write patch to a temp file with strict newline="\n" and apply via git
+    patch_file = _write_patch_file(patch.unified_diff)
+    try:
+        _git_apply_with_fallback(patch_file, patched_ws)
+    finally:
+        with contextlib.suppress(OSError):
+            Path(patch_file).unlink()
 
-    # Step 5: Apply each file patch
-    for file_patch in parsed.files:
-        _apply_file_patch(file_patch, patched_ws)
-
-    # Step 6: Post-apply symlink escape re-verification for every allowed_edit_path
+    # Step 5: Post-apply symlink escape re-verification for every allowed_edit_path
     resolved_root = patched_ws.resolve()
     for rel_path in allowed_edit_paths:
         candidate = (patched_ws / rel_path).resolve()
@@ -222,49 +239,8 @@ def apply_validated_patch(
                 root=str(resolved_root),
             )
 
+    # Silence unused-parsed warning (parsed is retained for future extensibility
+    # e.g. targeted per-file post-apply validation).
+    _ = parsed
+
     return patched_ws
-
-
-def _try_git_apply_check(diff_text: str, workspace: Path) -> bool:
-    """Attempt a `git apply --check` dry run. Returns True if successful, False otherwise.
-
-    Parameters
-    ----------
-    diff_text:
-        Raw unified diff text.
-    workspace:
-        Workspace path to run git inside.
-
-    Returns
-    -------
-    bool
-        True if git apply --check succeeded, False if git is unavailable or the
-        workspace is not a git repo (non-fatal; falls back to manual application).
-    """
-    with contextlib.suppress(Exception):
-        import tempfile as _tf
-
-        with _tf.NamedTemporaryFile(
-            mode="w",
-            suffix=".patch",
-            delete=False,
-            encoding="utf-8",
-        ) as f:
-            f.write(diff_text)
-            patch_file = f.name
-
-        try:
-            result = subprocess.run(
-                ["git", "apply", "--check", patch_file],
-                cwd=str(workspace),
-                capture_output=True,
-                text=True,
-                timeout=10.0,
-                check=False,
-            )
-            return result.returncode == 0
-        finally:
-            with contextlib.suppress(OSError):
-                Path(patch_file).unlink()
-
-    return False
