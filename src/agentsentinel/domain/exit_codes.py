@@ -50,18 +50,22 @@ class ExitCode(enum.IntEnum):
 # ---------------------------------------------------------------------------
 
 #: Exit codes that indicate the test environment is broken (not the patch).
-HARNESS_BROKEN_CODES: frozenset[ExitCode] = frozenset({
-    ExitCode.INTERNAL_ERROR,
-    ExitCode.USAGE_ERROR,
-    ExitCode.NO_TESTS_COLLECTED,
-    ExitCode.INTERRUPTED,
-})
+HARNESS_BROKEN_CODES: frozenset[ExitCode] = frozenset(
+    {
+        ExitCode.INTERNAL_ERROR,
+        ExitCode.USAGE_ERROR,
+        ExitCode.NO_TESTS_COLLECTED,
+        ExitCode.INTERRUPTED,
+    }
+)
 
 #: Exit codes that indicate a genuine test-level verdict (pass or fail).
-VERDICT_CODES: frozenset[ExitCode] = frozenset({
-    ExitCode.OK,
-    ExitCode.TESTS_FAILED,
-})
+VERDICT_CODES: frozenset[ExitCode] = frozenset(
+    {
+        ExitCode.OK,
+        ExitCode.TESTS_FAILED,
+    }
+)
 
 
 def classify(raw_code: int) -> ExitCode:

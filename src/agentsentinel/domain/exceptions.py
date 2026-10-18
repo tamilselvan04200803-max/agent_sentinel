@@ -67,9 +67,7 @@ class ResourceExhaustionError(SandboxViolationError):
         self.resource = resource
         self.limit = limit
         self.actual = actual
-        super().__init__(
-            f"Resource exhaustion [{resource}]: limit={limit!r}, actual={actual!r}"
-        )
+        super().__init__(f"Resource exhaustion [{resource}]: limit={limit!r}, actual={actual!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +87,7 @@ class TestFileModificationError(PatchPolicyError):
 
     def __init__(self, test_path: str) -> None:
         self.test_path = test_path
-        super().__init__(
-            f"REWARD-HACKING BAN: patch targets test file {test_path!r}"
-        )
+        super().__init__(f"REWARD-HACKING BAN: patch targets test file {test_path!r}")
 
 
 class MalformedDiffError(PatchPolicyError):
@@ -112,8 +108,7 @@ class AllowlistViolationError(PatchPolicyError):
         self.path = path
         self.allowlist = allowlist
         super().__init__(
-            f"Allowlist violation: {path!r} not in approved set "
-            f"({len(allowlist)} entries)"
+            f"Allowlist violation: {path!r} not in approved set ({len(allowlist)} entries)"
         )
 
 
@@ -132,9 +127,7 @@ class HarnessTimeoutError(ReproHarnessError):
     def __init__(self, timeout_seconds: float, command: str) -> None:
         self.timeout_seconds = timeout_seconds
         self.command = command
-        super().__init__(
-            f"Harness timeout after {timeout_seconds}s running: {command!r}"
-        )
+        super().__init__(f"Harness timeout after {timeout_seconds}s running: {command!r}")
 
 
 class HarnessSetupError(ReproHarnessError):
@@ -144,6 +137,5 @@ class HarnessSetupError(ReproHarnessError):
         self.reason = reason
         self.stderr = stderr
         super().__init__(
-            f"Harness setup failed: {reason}"
-            + (f"\nstderr: {stderr[:500]}" if stderr else "")
+            f"Harness setup failed: {reason}" + (f"\nstderr: {stderr[:500]}" if stderr else "")
         )

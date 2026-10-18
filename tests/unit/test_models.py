@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -22,6 +22,7 @@ VALID_SHA = "a" * 40
 # CaseSpec
 # ---------------------------------------------------------------------------
 
+
 class TestCaseSpec:
     @pytest.mark.unit
     def test_valid_construction(self, valid_case_spec: CaseSpec) -> None:
@@ -38,9 +39,9 @@ class TestCaseSpec:
         "bad_sha",
         [
             "short",
-            "z" * 40,         # non-hex
-            "a" * 39,         # too short
-            "a" * 41,         # too long
+            "z" * 40,  # non-hex
+            "a" * 39,  # too short
+            "a" * 41,  # too long
             "",
         ],
     )
@@ -53,7 +54,7 @@ class TestCaseSpec:
                 test_command="pytest",
                 allowed_edit_paths=("a.py",),
                 failing_test_ids=("test_x.py::test_y",),
-                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
 
     @pytest.mark.unit
@@ -66,7 +67,7 @@ class TestCaseSpec:
                 test_command="pytest",
                 allowed_edit_paths=(),
                 failing_test_ids=("tests/test_x.py::test_y",),
-                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
 
     @pytest.mark.unit
@@ -79,7 +80,7 @@ class TestCaseSpec:
                 test_command="pytest",
                 allowed_edit_paths=("a.py",),
                 failing_test_ids=(),
-                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
 
     @pytest.mark.unit
@@ -105,7 +106,7 @@ class TestCaseSpec:
     @pytest.mark.unit
     def test_metadata_canonicalization_and_hash_equality(self) -> None:
         """Two CaseSpec instances with reversed metadata keys must produce identical hash() and equal comparison."""
-        dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        dt = datetime(2026, 1, 1, tzinfo=UTC)
         spec1 = CaseSpec(
             case_id="case-1",
             repo_url="https://example.com/repo",
@@ -133,7 +134,7 @@ class TestCaseSpec:
 
     @pytest.mark.unit
     def test_metadata_duplicate_key_rejected(self) -> None:
-        dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        dt = datetime(2026, 1, 1, tzinfo=UTC)
         with pytest.raises(ValueError, match="Duplicate metadata key"):
             CaseSpec(
                 case_id="case-1",
@@ -151,6 +152,7 @@ class TestCaseSpec:
 # PatchProposal
 # ---------------------------------------------------------------------------
 
+
 class TestPatchProposal:
     @pytest.mark.unit
     def test_diff_hash_computed(self, valid_patch: PatchProposal) -> None:
@@ -166,7 +168,7 @@ class TestPatchProposal:
             model_id="test",
             prompt_tokens=10,
             completion_tokens=5,
-            proposed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         assert len(p.diff_hash) == 64  # SHA-256 hex
 
@@ -179,7 +181,7 @@ class TestPatchProposal:
                 model_id="test",
                 prompt_tokens=0,
                 completion_tokens=0,
-                proposed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
 
     @pytest.mark.unit
@@ -191,7 +193,7 @@ class TestPatchProposal:
                 model_id="test",
                 prompt_tokens=-1,
                 completion_tokens=0,
-                proposed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
 
     @pytest.mark.unit
@@ -203,7 +205,7 @@ class TestPatchProposal:
             model_id="m1",
             prompt_tokens=10,
             completion_tokens=5,
-            proposed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            proposed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         p2 = PatchProposal(
             case_id=valid_case_spec.case_id,
@@ -211,7 +213,7 @@ class TestPatchProposal:
             model_id="m2",
             prompt_tokens=20,
             completion_tokens=10,
-            proposed_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            proposed_at=datetime(2026, 2, 1, tzinfo=UTC),
         )
         assert p1.diff_hash == p2.diff_hash, "Identical diffs must produce identical hashes"
 
@@ -219,6 +221,7 @@ class TestPatchProposal:
 # ---------------------------------------------------------------------------
 # ExecutionResult
 # ---------------------------------------------------------------------------
+
 
 class TestExecutionResult:
     @pytest.mark.unit
@@ -273,6 +276,7 @@ class TestExecutionResult:
 # ---------------------------------------------------------------------------
 # EvidenceBundle
 # ---------------------------------------------------------------------------
+
 
 class TestEvidenceBundle:
     @pytest.mark.unit
@@ -362,16 +366,16 @@ class TestEvidenceBundle:
         baseline_result: ExecutionResult,
         passing_result: ExecutionResult,
     ) -> None:
-        kwargs = dict(
-            case_id=valid_case_spec.case_id,
-            spec=valid_case_spec,
-            baseline_result=baseline_result,
-            accepted_patch=valid_patch,
-            final_result=passing_result,
-            total_prompt_tokens=100,
-            total_completion_tokens=50,
-            attempts=1,
-        )
+        kwargs = {
+            "case_id": valid_case_spec.case_id,
+            "spec": valid_case_spec,
+            "baseline_result": baseline_result,
+            "accepted_patch": valid_patch,
+            "final_result": passing_result,
+            "total_prompt_tokens": 100,
+            "total_completion_tokens": 50,
+            "attempts": 1,
+        }
         b1 = EvidenceBundle(**kwargs)  # type: ignore[arg-type]
         b2 = EvidenceBundle(**kwargs)  # type: ignore[arg-type]
         assert b1.bundle_hash == b2.bundle_hash
@@ -396,10 +400,16 @@ class TestEvidenceBundle:
         )
         summary = bundle.to_summary_dict()
         required_keys = {
-            "case_id", "repair_succeeded", "attempts",
-            "baseline_exit_code", "final_exit_code",
-            "wall_seconds_final", "total_prompt_tokens",
-            "total_completion_tokens", "patch_hash", "bundle_hash",
+            "case_id",
+            "repair_succeeded",
+            "attempts",
+            "baseline_exit_code",
+            "final_exit_code",
+            "wall_seconds_final",
+            "total_prompt_tokens",
+            "total_completion_tokens",
+            "patch_hash",
+            "bundle_hash",
         }
         assert required_keys.issubset(summary.keys())
 

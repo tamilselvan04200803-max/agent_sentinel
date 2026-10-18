@@ -1,6 +1,6 @@
 """AgentSentinel — deterministic, sandboxed, evidence-first automated software repair engine."""
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__: str = version("agentsentinel")

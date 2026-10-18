@@ -70,7 +70,7 @@ NORMALIZER_PATCH_DIFF = """--- a/normalizer.py
 @@ -1,4 +1,6 @@
  \"\"\"Normalizer module.\"\"\"
 +import re
- 
+
  def normalize_token(text: str) -> str:
 -    return text.strip().lower()
 +    cleaned = re.sub(r"[\\x00-\\x1f\\x7f]", "", text)
