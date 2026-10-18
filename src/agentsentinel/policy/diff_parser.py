@@ -70,8 +70,28 @@ class FilePatch:
     is_rename: bool = False
 
     @property
+    def target_paths(self) -> tuple[str, ...]:
+        """Return ALL real file paths touched by this patch, excluding ``/dev/null``.
+
+        For a normal modification this is a single-element tuple. For a rename
+        (``is_rename``) or a deletion that is tracked against a specific source
+        path we return **both** the old and new paths (when they are real
+        filesystem paths — i.e. not ``/dev/null``). This is critical for the
+        policy validator: when a diff renames ``tests/test_x.py`` →
+        ``src/x.py`` (a reward-hacking attempt to hide a test), the validator
+        must see BOTH paths and reject the patch for touching a test file.
+        """
+        paths: list[str] = []
+        seen: set[str] = set()
+        for p in (self.old_path, self.new_path):
+            if p and p != "/dev/null" and p not in seen:
+                paths.append(p)
+                seen.add(p)
+        return tuple(paths)
+
+    @property
     def target_path(self) -> str:
-        """The canonical target path of the modified or created file."""
+        """The canonical *primary* target path (preferring new_path, else old_path)."""
         if self.new_path and self.new_path != "/dev/null":
             return self.new_path
         if self.old_path and self.old_path != "/dev/null":
@@ -88,8 +108,19 @@ class ParsedDiff:
 
     @property
     def target_paths(self) -> tuple[str, ...]:
-        """All canonical target file paths touched by this diff."""
-        return tuple(f.target_path for f in self.files if f.target_path)
+        """All real file paths touched by this diff (excluding ``/dev/null``).
+
+        For renames this includes BOTH the source and destination paths so
+        that ``validator.py`` can block test deletion / test renaming.
+        """
+        out: list[str] = []
+        seen: set[str] = set()
+        for f in self.files:
+            for p in f.target_paths:
+                if p and p not in seen:
+                    out.append(p)
+                    seen.add(p)
+        return tuple(out)
 
 
 class UnifiedDiffParser:
@@ -98,6 +129,17 @@ class UnifiedDiffParser:
     @staticmethod
     def parse(diff_text: str) -> ParsedDiff:
         """Parse raw unified diff text into a structured ParsedDiff object.
+
+        CRLF normalisation
+        ------------------
+        LLM outputs and Windows-generated diffs routinely mix ``\r\n`` and
+        ``\n`` line endings. Before parsing we normalise every line ending to
+        plain ``\n`` so that header detection (``--- a/...``, ``+++ b/...``)
+        and hunk parsing behave identically across platforms. We do NOT strip
+        carriage returns from hunk *content* lines — a bare ``\r`` at column
+        zero of a content line would be misinterpreted as a missing origin
+        character, so we split lines in a CRLF-aware way via ``splitlines()``
+        which already strips both ``\r\n`` and ``\n`` terminators.
 
         Parameters
         ----------
@@ -116,6 +158,12 @@ class UnifiedDiffParser:
         """
         if not diff_text or not diff_text.strip():
             raise MalformedDiffError("Diff text is empty")
+
+        # Normalise CRLF → LF up front. ``str.splitlines()`` already handles
+        # \r\n, \n, \r, etc. and strips the terminators, so just normalising
+        # the input by replacing \r\n with \n is sufficient to ensure
+        # consistent header/hunk parsing.
+        diff_text = diff_text.replace("\r\n", "\n").replace("\r", "\n")
 
         lines = diff_text.splitlines()
         file_patches: list[FilePatch] = []

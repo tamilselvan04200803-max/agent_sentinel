@@ -189,7 +189,8 @@ class TestApplyValidatedPatchAdversarial:
 
     @pytest.mark.adversarial
     def test_context_mismatch_raises(self, tmp_path: Path) -> None:
-        """Patch with wrong context line content raises PatchApplicationError."""
+        """Patch with wrong context line content raises PatchApplicationError
+        directly from apply_validated_patch (no silent manual fallback)."""
         src_ws = tmp_path / "source"
         src_ws.mkdir()
         # File has "hello" but diff expects "world" as context
@@ -205,7 +206,7 @@ class TestApplyValidatedPatchAdversarial:
 +    return x.strip().world()
 """
         patch = _make_patch(wrong_context_diff)
-        with pytest.raises(PatchApplicationError, match="mismatch"):
+        with pytest.raises(PatchApplicationError):
             apply_validated_patch(
                 patch=patch,
                 source_workspace=src_ws,
@@ -214,13 +215,14 @@ class TestApplyValidatedPatchAdversarial:
 
     @pytest.mark.adversarial
     def test_missing_source_file_raises(self, tmp_path: Path) -> None:
-        """Patching a non-existent file (non-new) raises PatchApplicationError."""
+        """Patching a non-existent file (non-new) raises PatchApplicationError
+        directly from git apply --check."""
         src_ws = tmp_path / "source"
         src_ws.mkdir()
         # normalizer.py does NOT exist in source_ws
 
         patch = _make_patch(_VALID_DIFF)
-        with pytest.raises(PatchApplicationError, match="does not exist"):
+        with pytest.raises(PatchApplicationError):
             apply_validated_patch(
                 patch=patch,
                 source_workspace=src_ws,

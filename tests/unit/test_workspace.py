@@ -64,7 +64,9 @@ class TestWorkspaceManager:
 
     @pytest.mark.unit
     def test_git_scrubbing(self, tmp_path: Path) -> None:
-        """Verify git history scrubbing removes reflogs and logs."""
+        """Verify git history scrubbing removes the ENTIRE .git directory —
+        not just reflogs — so that `git log -p --all` cannot leak future
+        reference fixes."""
         repo = tmp_path / "test_repo"
         repo.mkdir()
         git_dir = repo / ".git"
@@ -72,9 +74,13 @@ class TestWorkspaceManager:
         logs_dir = git_dir / "logs"
         logs_dir.mkdir()
         (logs_dir / "HEAD").write_text("commit log line", encoding="utf-8")
+        objects = git_dir / "objects" / "pack"
+        objects.mkdir(parents=True)
+        (objects / "pack-abc.pack").write_bytes(b"fake-pack")
+        (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
 
         mgr = WorkspaceManager()
         mgr.scrub_git_history(repo)
 
-        # Reflogs must be completely wiped
-        assert not logs_dir.exists()
+        # Entire .git directory must be removed
+        assert not git_dir.exists()

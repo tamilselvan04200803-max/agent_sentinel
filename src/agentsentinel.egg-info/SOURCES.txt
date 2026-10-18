@@ -13,8 +13,15 @@ src/agentsentinel/domain/exit_codes.py
 src/agentsentinel/domain/models.py
 src/agentsentinel/evaluation/__init__.py
 src/agentsentinel/llm/__init__.py
+src/agentsentinel/llm/client.py
+src/agentsentinel/llm/exceptions.py
+src/agentsentinel/llm/pricing.py
+src/agentsentinel/llm/prompts.py
 src/agentsentinel/orchestrator/__init__.py
 src/agentsentinel/policy/__init__.py
+src/agentsentinel/policy/applier.py
+src/agentsentinel/policy/diff_parser.py
+src/agentsentinel/policy/validator.py
 src/agentsentinel/sandbox/__init__.py
 src/agentsentinel/sandbox/container.py
 src/agentsentinel/sandbox/workspace.py

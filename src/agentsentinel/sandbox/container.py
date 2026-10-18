@@ -17,7 +17,9 @@ Enforces strict host safety:
 from __future__ import annotations
 
 import contextlib
+import queue
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -31,6 +33,7 @@ from agentsentinel.domain.exit_codes import ExitCode, classify
 from agentsentinel.domain.models import ExecutionResult
 
 if TYPE_CHECKING:
+    import io
     from pathlib import Path
 
 DEFAULT_IMAGE = "agentsentinel-runner:py311"
@@ -235,12 +238,10 @@ class HardenedContainerRunner:
         )
 
         start_time = time.monotonic()
-        stdout_bytes = bytearray()
-        stderr_bytes = bytearray()
-        stdout_truncated = False
-        stderr_truncated = False
+        max_b = self.config.max_output_bytes
 
         proc: subprocess.Popen[bytes] | None = None
+        timed_out = False
         try:
             proc = subprocess.Popen(
                 run_args,
@@ -249,33 +250,44 @@ class HardenedContainerRunner:
                 stdin=subprocess.DEVNULL,
             )
 
-            # Wait for execution with timeout
-            try:
-                raw_out, raw_err = proc.communicate(timeout=self.config.timeout_seconds)
-            except subprocess.TimeoutExpired:
-                # Force kill subprocess and container
-                proc.kill()
-                self._force_remove_container(container_name)
-                cmd_str = command if isinstance(command, str) else " ".join(command)
-                raise HarnessTimeoutError(self.config.timeout_seconds, cmd_str) from None
+            # --- Bounded streaming read --------------------------------------
+            # We MUST NOT use proc.communicate() here because that buffers the
+            # entire stdout/stderr in host Python memory. An attacker-controlled
+            # `while True: print("A"*10000)` loop inside the container would
+            # buffer gigabytes before the timeout fires, causing a host OOM.
+            #
+            # Instead we read from both pipes in bounded chunks via a selector,
+            # accumulating up to max_output_bytes per stream and discarding any
+            # overflow while continuing to drain the pipes (so the child does
+            # not block on a full pipe buffer).
+            assert proc.stdout is not None and proc.stderr is not None
+            stdout_bytes, stderr_bytes, stdout_truncated, stderr_truncated = (
+                self._bounded_stream_read(
+                    proc,
+                    max_b,
+                    timeout=self.config.timeout_seconds,
+                )
+            )
 
-            # Process output streams with byte truncation limits
-            max_b = self.config.max_output_bytes
-
-            if len(raw_out) > max_b:
-                stdout_truncated = True
-                stdout_bytes = bytearray(raw_out[:max_b])
-            else:
-                stdout_bytes = bytearray(raw_out)
-
-            if len(raw_err) > max_b:
-                stderr_truncated = True
-                stderr_bytes = bytearray(raw_err[:max_b])
-            else:
-                stderr_bytes = bytearray(raw_err)
+            # Ensure process is fully reaped
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=2.0)
+                    timed_out = True
 
             wall_seconds = max(0.0, time.monotonic() - start_time)
             raw_exit_code = proc.returncode
+
+            if timed_out or wall_seconds >= self.config.timeout_seconds:
+                # Either the wall-clock budget was hit or we had to kill a
+                # stuck process after stream drain.
+                self._force_remove_container(container_name)
+                cmd_str = command if isinstance(command, str) else " ".join(command)
+                raise HarnessTimeoutError(self.config.timeout_seconds, cmd_str)
 
             # Decode bytes with safe error handling
             stdout_str = stdout_bytes.decode("utf-8", errors="replace")
@@ -312,6 +324,120 @@ class HardenedContainerRunner:
                 with contextlib.suppress(Exception):
                     proc.kill()
                     proc.wait(timeout=2.0)
+
+    @staticmethod
+    def _stream_pipe_to_queue(
+        pipe: io.RawIOBase | io.BufferedIOBase,
+        q: queue.Queue[tuple[str, bytes]],
+        name: str,
+    ) -> None:
+        """Worker for thread-based pipe draining.
+
+        Reads from ``pipe`` in bounded chunks (16 KiB) and pushes
+        ``(name, chunk)`` tuples onto ``q``. A single empty ``b""`` chunk is
+        pushed to signal EOF.
+
+        Reading happens in a *separate thread* so the main thread can
+        enforce the wall-clock timeout without buffering the entire stream
+        into Python memory. We also never call ``pipe.read()`` without a
+        size hint, which would buffer unlimited data.
+        """
+        try:
+            while True:
+                chunk = pipe.read(16384)
+                if not chunk:
+                    q.put((name, b""))
+                    return
+                q.put((name, chunk))
+        except (OSError, ValueError):
+            # Pipe closed or other I/O error — signal EOF to consumer
+            q.put((name, b""))
+
+    @staticmethod
+    def _bounded_stream_read(
+        proc: subprocess.Popen[bytes],
+        max_bytes: int,
+        timeout: float,
+    ) -> tuple[bytearray, bytearray, bool, bool]:
+        """Read from proc.stdout/proc.stderr in bounded chunks, capping at ``max_bytes``.
+
+        Returns ``(stdout_bytes, stderr_bytes, stdout_truncated, stderr_truncated)``.
+
+        Design (anti-OOM)
+        -----------------
+        Each pipe is drained by a dedicated daemon thread that reads in 16 KiB
+        chunks. The main thread pulls chunks off a queue up to ``max_bytes``
+        per stream; any overflow chunks are pulled off the queue and
+        *discarded* (but the thread keeps draining so the child never blocks
+        on a full OS pipe buffer). This guarantees host-memory usage is
+        bounded by ``2 * max_bytes + 2 * queue_buffer`` regardless of how much
+        output the container produces.
+
+        If the wall-clock ``timeout`` elapses before both pipes close we
+        return whatever was captured so far; the caller is responsible for
+        killing the process.
+        """
+        import time as _time
+
+        deadline = _time.monotonic() + timeout
+        stdout_buf = bytearray()
+        stderr_buf = bytearray()
+        stdout_truncated = False
+        stderr_truncated = False
+
+        assert proc.stdout is not None and proc.stderr is not None
+
+        q: queue.Queue[tuple[str, bytes]] = queue.Queue()
+        t_out = threading.Thread(
+            target=HardenedContainerRunner._stream_pipe_to_queue,
+            args=(proc.stdout, q, "stdout"),
+            daemon=True,
+        )
+        t_err = threading.Thread(
+            target=HardenedContainerRunner._stream_pipe_to_queue,
+            args=(proc.stderr, q, "stderr"),
+            daemon=True,
+        )
+        t_out.start()
+        t_err.start()
+
+        stdout_eof = False
+        stderr_eof = False
+
+        try:
+            while not (stdout_eof and stderr_eof):
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    name, chunk = q.get(timeout=min(0.25, max(0.001, remaining)))
+                except queue.Empty:
+                    continue
+                if not chunk:
+                    if name == "stdout":
+                        stdout_eof = True
+                    else:
+                        stderr_eof = True
+                    continue
+                if name == "stdout":
+                    room = max_bytes - len(stdout_buf)
+                    if room > 0:
+                        stdout_buf.extend(chunk[:room])
+                    if len(chunk) > room:
+                        stdout_truncated = True
+                else:
+                    room = max_bytes - len(stderr_buf)
+                    if room > 0:
+                        stderr_buf.extend(chunk[:room])
+                    if len(chunk) > room:
+                        stderr_truncated = True
+        finally:
+            # Drain any leftover chunks so the worker threads can exit cleanly
+            # even if we timed out (avoids a rare pipe-write deadlock before
+            # proc.kill() in the caller).
+            for t in (t_out, t_err):
+                t.join(timeout=0.5)
+        return stdout_buf, stderr_buf, stdout_truncated, stderr_truncated
 
     def _force_remove_container(self, container_name: str) -> None:
         """Issue docker rm -f <container_name> to ensure no zombie containers remain."""

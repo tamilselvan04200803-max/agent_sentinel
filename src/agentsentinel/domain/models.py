@@ -189,6 +189,12 @@ class ExecutionResult:
         ``True`` if stdout exceeded the capture limit and was truncated.
     stderr_truncated:
         ``True`` if stderr exceeded the capture limit and was truncated.
+    expected_test_ids:
+        Optional tuple of test node IDs that MUST have run and passed. When
+        provided, ``passed`` only returns True if every listed test ID appears
+        in ``stdout`` with a PASSED marker — this prevents an empty test run
+        (or a suite that silently skipped the failing tests) from being
+        incorrectly classified as a pass.
     executed_at:
         UTC timestamp of when execution completed.
 
@@ -206,6 +212,7 @@ class ExecutionResult:
     wall_seconds: float
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    expected_test_ids: tuple[str, ...] | None = None
     executed_at: datetime = field(default_factory=_utcnow)
 
     def __post_init__(self) -> None:
@@ -214,10 +221,37 @@ class ExecutionResult:
         # Validate exit_code is a known ExitCode
         ExitCode(self.exit_code)  # raises ValueError for unknown codes
 
+    @staticmethod
+    def _test_passed_in_output(test_id: str, stdout: str) -> bool:
+        """Check whether ``test_id`` is reported as PASSED in pytest stdout.
+
+        Pytest prints lines like ``tests/test_x.py::test_fn PASSED`` for each
+        passing node. We match the test node ID followed by whitespace and the
+        word ``PASSED`` to be robust against varying output formats.
+        """
+        import re
+
+        # Escape the test ID for regex safety and look for " PASSED"
+        pattern = re.escape(test_id) + r"\s+PASSED"
+        return re.search(pattern, stdout) is not None
+
     @property
     def passed(self) -> bool:
-        """True iff the test suite returned ExitCode.OK."""
-        return self.exit_code == ExitCode.OK
+        """True iff exit_code==OK AND every expected test actually ran and passed.
+
+        If ``expected_test_ids`` is None (legacy/test construction), we fall back
+        to the bare exit_code check. When expected_test_ids is provided, each
+        ID must appear in ``stdout`` with a PASSED marker — this guards against
+        reward-hacking scenarios where the test command exits 0 but actually
+        ran zero tests (e.g. ``pytest`` with a misconfigured ``--ignore`` or a
+        malicious ``conftest.py`` that short-circuits collection).
+        """
+        if self.exit_code != ExitCode.OK:
+            return False
+        if self.expected_test_ids is None:
+            return True
+        # Verify every expected failing test actually ran and passed
+        return all(self._test_passed_in_output(tid, self.stdout) for tid in self.expected_test_ids)
 
     @property
     def failed(self) -> bool:

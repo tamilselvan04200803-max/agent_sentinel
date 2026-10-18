@@ -14,7 +14,6 @@ Verifies the 6 non-negotiable security boundary checks:
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -100,13 +99,54 @@ class TestAdversarialM1ContainerSecurity:
     def test_security_check_6_infinite_loop_timeout_and_container_cleanup(
         self, tmp_path: Path
     ) -> None:
-        """Verify that an infinite loop or hanging process terminates on timeout and forces docker rm -f."""
+        """Verify that an infinite loop / hanging process triggers wall-clock
+        timeout AND the bounded streaming reader does NOT buffer unlimited
+        output before the timeout fires (anti-host-OOM guarantee)."""
+        import contextlib as _ctx
+        import os as _os
+        import select as _select
+
         runner = HardenedContainerRunner(ContainerConfig(timeout_seconds=0.2))
 
-        mock_proc = MagicMock()
-        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="while true", timeout=0.2)
+        class _HangPipe:
+            def __init__(self) -> None:
+                self._r, self._w = _os.pipe()
+                self._killed = False
 
-        with patch("subprocess.Popen", return_value=mock_proc), patch("subprocess.run") as mock_run:
+            def read(self, size: int) -> bytes:
+                if self._killed:
+                    return b""
+                while not self._killed:
+                    ready, _, _ = _select.select([self._r], [], [], 0.1)
+                    if ready:
+                        return _os.read(self._r, size)
+                return b""
+
+            def fileno(self) -> int:
+                return self._r
+
+            def kill(self) -> None:
+                self._killed = True
+                with _ctx.suppress(OSError):
+                    _os.close(self._w)
+
+            def close(self) -> None:
+                with _ctx.suppress(OSError):
+                    _os.close(self._r)
+
+        out_pipe = _HangPipe()
+        err_pipe = _HangPipe()
+        mock_proc = MagicMock()
+        mock_proc.stdout = out_pipe
+        mock_proc.stderr = err_pipe
+        mock_proc.pid = 9999
+        mock_proc.poll.side_effect = lambda: (-9 if out_pipe._killed else None)
+        mock_proc.kill.side_effect = lambda: (out_pipe.kill(), err_pipe.kill())
+        mock_proc.wait.return_value = -9
+
+        with patch("subprocess.Popen", return_value=mock_proc), patch(
+            "subprocess.run"
+        ) as mock_run:
             with pytest.raises(HarnessTimeoutError):
                 runner.run_in_container(
                     case_id="adv-timeout",
@@ -115,24 +155,37 @@ class TestAdversarialM1ContainerSecurity:
                     command="python -c 'while True: pass'",
                 )
 
-            # Verification: docker rm -f <container_name> was executed in finally block
+            # Verification: container was force-removed and proc was killed
             mock_proc.kill.assert_called()
-            called_cmds = [call.args[0] for call in mock_run.call_args_list if call.args]
+            called_cmds = [c.args[0] for c in mock_run.call_args_list if c.args]
             assert any(
                 cmd[0] == "docker" and cmd[1] == "rm" and cmd[2] == "-f" for cmd in called_cmds
             )
 
+        out_pipe.close()
+        err_pipe.close()
+
     @pytest.mark.adversarial
     def test_security_check_7_output_flood_truncation(self, tmp_path: Path) -> None:
-        """Verify that generating megabytes of output (yes 'flood') is truncated at max_output_bytes."""
+        """Verify that generating megabytes of output (yes 'flood') is truncated
+        at ``max_output_bytes`` AND crucially that the captured output is
+        actually *bounded* — i.e. host memory never buffers the full 5 MB.
+        """
+        import io as _io
+
         runner = HardenedContainerRunner(ContainerConfig(max_output_bytes=512))
 
         # 5 MB of output
         huge_output = b"x" * (5 * 1024 * 1024)
         mock_proc = MagicMock()
-        mock_proc.communicate.return_value = (huge_output, b"")
+        # BytesIO streams close (return b"") once fully consumed, which mimics
+        # real pipe EOF semantics for the thread-based reader.
+        mock_proc.stdout = _io.BytesIO(huge_output)
+        mock_proc.stderr = _io.BytesIO(b"")
         mock_proc.returncode = 0
         mock_proc.poll.return_value = 0
+        mock_proc.kill.return_value = None
+        mock_proc.wait.return_value = 0
 
         with patch("subprocess.Popen", return_value=mock_proc):
             res = runner.run_in_container(

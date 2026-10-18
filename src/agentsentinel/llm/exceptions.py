@@ -7,7 +7,12 @@ orchestrator can categorize and account for each attempt.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from agentsentinel.domain.exceptions import AgentSentinelError
+
+if TYPE_CHECKING:
+    from agentsentinel.llm.pricing import ModelUsage
 
 
 class LLMError(AgentSentinelError):
@@ -15,13 +20,32 @@ class LLMError(AgentSentinelError):
 
 
 class LLMGenerationError(LLMError):
-    """Raised when the LLM generates a response that cannot be parsed as a PatchProposal."""
+    """Raised when the LLM generates a response that cannot be parsed as a PatchProposal.
 
-    def __init__(self, reason: str, raw_response: str = "") -> None:
+    Critically, even when parsing fails we carry ``usage`` (a
+    :class:`~agentsentinel.llm.pricing.ModelUsage` instance) when the API
+    returned token-usage metadata before schema validation failed. This
+    guarantees the orchestrator never loses track of spent tokens or attempts:
+    a parse failure STILL consumed model tokens and counts as an attempt.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        raw_response: str = "",
+        usage: ModelUsage | None = None,
+    ) -> None:
         self.reason = reason
         self.raw_response = raw_response
+        self.usage = usage
         snippet = raw_response[:200] if raw_response else "(empty)"
-        super().__init__(f"LLM generation failed: {reason} | response snippet: {snippet!r}")
+        msg = f"LLM generation failed: {reason} | response snippet: {snippet!r}"
+        if usage is not None:
+            msg += (
+                f" [tokens spent: prompt={usage.prompt_tokens}, "
+                f"completion={usage.completion_tokens}]"
+            )
+        super().__init__(msg)
 
 
 class LLMTimeoutError(LLMError):

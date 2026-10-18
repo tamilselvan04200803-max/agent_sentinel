@@ -193,12 +193,25 @@ class PromptBuilder:
         sections.append(failure_section)
 
         # ── Source file contents with line numbers ──────────────────────────
+        resolved_root = self.workspace_root.resolve()
         source_sections: list[str] = []
         for rel_path in spec.allowed_edit_paths:
-            # Security: never traverse outside workspace root
+            # Security: hard reject absolute paths and obvious traversal sequences
+            # before doing any filesystem join. Defence-in-depth: even if the
+            # policy layer misses a ``../`` (e.g. via case-insensitive Windows
+            # paths, percent-encoded sequences, or symlinks), we must not read
+            # host files into the prompt.
+            if rel_path.startswith(("/", "\\")) or ".." in rel_path.replace("\\", "/").split("/"):
+                continue
+            # Security: never traverse outside workspace root (symlink-safe
+            # check via resolve + is_relative_to).
             file_path = (self.workspace_root / rel_path).resolve()
-            if not file_path.is_relative_to(self.workspace_root.resolve()):
-                # Silently skip — this path was already validated by the policy layer
+            if not file_path.is_relative_to(resolved_root):
+                # Silently skip — path escapes root via symlink or traversal
+                continue
+            # Belt-and-braces: never read from inside .git/ even if allowlisted
+            rel_parts = rel_path.replace("\\", "/").strip("/").split("/")
+            if rel_parts and rel_parts[0] == ".git":
                 continue
 
             content, truncated = _read_file_safe(file_path, self.max_file_chars)

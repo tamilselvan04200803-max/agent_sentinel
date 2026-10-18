@@ -139,3 +139,55 @@ class HarnessSetupError(ReproHarnessError):
         super().__init__(
             f"Harness setup failed: {reason}" + (f"\nstderr: {stderr[:500]}" if stderr else "")
         )
+
+
+# ---------------------------------------------------------------------------
+# M4 orchestrator errors
+# ---------------------------------------------------------------------------
+
+
+class OrchestratorError(AgentSentinelError):
+    """Base for all orchestrator-state / run-lifecycle errors."""
+
+
+class DuplicatePatchError(OrchestratorError):
+    """Raised when a proposed patch is a duplicate or AST no-op of a prior attempt."""
+
+    def __init__(self, reason: str, tier: str = "unknown") -> None:
+        self.tier = tier
+        super().__init__(f"Duplicate/no-op patch rejected [{tier}]: {reason}")
+
+
+class BaselineNotReproducedError(OrchestratorError):
+    """Raised when the baseline run exits OK or harness-broken before any LLM call."""
+
+    def __init__(self, exit_code: int, detail: str = "") -> None:
+        self.exit_code = exit_code
+        super().__init__(
+            f"Baseline not reproduced (exit_code={exit_code}). "
+            "The bug must reproduce (TESTS_FAILED=1) before any repair attempt."
+            + (f"\n{detail}" if detail else "")
+        )
+
+
+class InfrastructureFailureError(OrchestratorError):
+    """Raised on Docker daemon / HTTP 429 transport failures (NOT counted as attempt)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Infrastructure failure (no attempt counted): {reason}")
+
+
+class ApprovalIntegrityError(OrchestratorError):
+    """Raised when approval hash does not match the expected cryptographic binding."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Approval integrity check failed: {reason}")
+
+
+class UnapprovedExportError(OrchestratorError):
+    """Raised when export_evidence_bundle is called on a non-APPROVED run."""
+
+    def __init__(self, state: str) -> None:
+        super().__init__(
+            f"Cannot export evidence bundle: run state is {state!r}, expected 'APPROVED'."
+        )
