@@ -57,12 +57,38 @@ class _MockLLM:
         )
 
 
-def _make_llm(provider: str, model_id: str | None) -> LLMClient:
+class _FixtureLLM:
+    """Fixture mock LLM that returns a valid fix patch if a reference.patch
+    exists alongside the case_spec, or a given patch string."""
+
+    def __init__(self, patch_diff: str) -> None:
+        self.patch_diff = patch_diff
+
+    def generate_patch(
+        self, case_id: str, prompt: str, model_id: str
+    ) -> tuple[Any, Any]:
+        from agentsentinel.domain.models import PatchProposal
+        from agentsentinel.llm.pricing import ModelUsage
+        return (
+            PatchProposal(
+                case_id=case_id,
+                unified_diff=self.patch_diff,
+                model_id="fixture-llm",
+                prompt_tokens=10,
+                completion_tokens=10,
+            ),
+            ModelUsage(model_id="fixture-llm", prompt_tokens=10, completion_tokens=10),
+        )
+
+
+def _make_llm(provider: str, model_id: str | None, patch_diff: str = "") -> LLMClient:
     """Construct an LLM client. The concrete OpenAI/Gemini clients pick the
     model per call via generate_patch(model_id=...); here we just return a
     default-constructed client (API keys from env)."""
     if provider == "mock":
         return _MockLLM()
+    if provider == "fixture":
+        return _FixtureLLM(patch_diff)
     if provider == "openai":
         return OpenAICompatibleClient()
     if provider == "gemini":
@@ -72,7 +98,12 @@ def _make_llm(provider: str, model_id: str | None) -> LLMClient:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     spec = _load_case_spec(Path(args.case_spec))
-    llm = _make_llm(args.provider, args.model)
+    patch_diff = ""
+    if args.patch:
+        patch_diff = Path(args.patch).read_text(encoding="utf-8")
+    elif (Path(args.case_spec).parent / "reference.patch").exists():
+        patch_diff = (Path(args.case_spec).parent / "reference.patch").read_text(encoding="utf-8")
+    llm = _make_llm(args.provider, args.model, patch_diff=patch_diff)
     db = Path(args.db)
     runner = HardenedContainerRunner(ContainerConfig(
         image=args.image or "agentsentinel-runner:py311",
@@ -265,7 +296,12 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--case-spec", required=True)
     pr.add_argument("--db", required=True)
     pr.add_argument("--max-attempts", type=int, default=3)
-    pr.add_argument("--provider", default="mock", choices=["mock", "openai", "gemini"])
+    pr.add_argument("--provider", default="mock", choices=["mock", "fixture", "openai", "gemini"])
+    pr.add_argument(
+        "--patch",
+        default=None,
+        help="Explicit unified diff file to return (for deterministic runs)",
+    )
     pr.add_argument("--model", default=None)
     pr.add_argument("--image", default=None)
     pr.add_argument("--image-digest", default=None)
@@ -319,3 +355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def cli_entrypoint() -> None:  # pragma: no cover
     sys.exit(main())
+
+
+if __name__ == "__main__":
+    cli_entrypoint()
