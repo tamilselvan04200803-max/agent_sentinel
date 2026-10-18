@@ -114,8 +114,8 @@ class HardenedContainerRunner:
         list[str]
             Full argument list for subprocess.
         """
-        # Ensure path is formatted cleanly for docker mount
-        host_path = str(workspace_host_path.resolve())
+        # Ensure path is formatted cleanly with forward slashes for docker mount (Windows & POSIX)
+        host_path = workspace_host_path.resolve().as_posix()
 
         args = [
             "docker",
@@ -169,13 +169,16 @@ class HardenedContainerRunner:
             ]
         )
 
-        # Environment hygiene: do not leak host environment or credentials
+        # Environment hygiene: do not leak host environment or credentials.
+        # Direct pytest cache to writable tmpfs to avoid breaking on --read-only rootfs.
         args.extend(
             [
                 "-e",
                 "PYTHONUNBUFFERED=1",
                 "-e",
                 "PYTHONDONTWRITEBYTECODE=1",
+                "-e",
+                "PYTEST_ADDOPTS=-o cache_dir=/tmp/.pytest_cache",
             ]
         )
 
@@ -222,7 +225,7 @@ class HardenedContainerRunner:
         HarnessTimeoutError
             If execution exceeds configured timeout.
         """
-        container_name = f"as_sb_{uuid.uuid4().hex[:12]}"
+        container_name = f"agentsentinel-{uuid.uuid4().hex[:12]}"
         run_args = self.build_docker_run_args(
             container_name=container_name,
             workspace_host_path=workspace_host_path,

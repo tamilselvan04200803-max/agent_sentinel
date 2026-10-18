@@ -52,7 +52,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "S", "E501"]
+"tests/**" = ["ANN", "S", "E501", "E402"]
 
 # ---------------------------------------------------------------------------
 # mypy — strict type checking
