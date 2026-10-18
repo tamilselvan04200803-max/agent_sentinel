@@ -33,7 +33,7 @@ from agentsentinel.domain.models import ExecutionResult
 if TYPE_CHECKING:
     from pathlib import Path
 
-DEFAULT_IMAGE = "python:3.11-slim"
+DEFAULT_IMAGE = "agentsentinel-runner:py311"
 DEFAULT_MEMORY_LIMIT = "512m"
 DEFAULT_PIDS_LIMIT = 64
 DEFAULT_CPUS = "1.0"
@@ -159,13 +159,15 @@ class HardenedContainerRunner:
             ]
         )
 
-        # Working directory & volume mount (only workspace is mounted)
+        # Working directory & volume mount.
+        # Workspace is mounted READ-ONLY (:ro) by VFS enforcement: test execution
+        # must NEVER mutate source files at runtime. Writes go to /tmp (tmpfs) only.
         args.extend(
             [
                 "-w",
                 workdir,
                 "-v",
-                f"{host_path}:{workdir}:rw",
+                f"{host_path}:{workdir}:ro",
             ]
         )
 

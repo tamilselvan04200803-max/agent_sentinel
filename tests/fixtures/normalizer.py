@@ -49,7 +49,23 @@ def normalize_token(text: str) -> str:
     return cleaned.lower()
 '''
 
-NORMALIZER_TEST_SOURCE = '''"""Tests for normalizer module."""
+NORMALIZER_TEST_SOURCE = '''"""Tests for normalizer module — requires pytest."""
+import pytest
+from normalizer import normalize_token
+
+def test_basic_lowercase():
+    assert normalize_token("  HELLO  ") == "hello"
+
+def test_collapses_internal_whitespace():
+    # FAILS on buggy version ("foo   bar" -> "foo   bar")
+    assert normalize_token("foo   bar") == "foo bar"
+
+def test_strips_control_characters():
+    # FAILS on buggy version ("foo\\x00bar" -> "foo\\x00bar")
+    assert normalize_token("foo\\x00\\x08bar") == "foobar"
+'''
+
+NORMALIZER_TEST_SOURCE_UNITTEST = '''"""Tests for normalizer module — stdlib unittest (no pytest required)."""
 import unittest
 from normalizer import normalize_token
 

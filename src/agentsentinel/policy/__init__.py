@@ -1,5 +1,6 @@
-"""Policy package: unified diff parsing and safety validation."""
+"""policy package exports for AgentSentinel."""
 
+from agentsentinel.policy.applier import PatchApplicationError, apply_validated_patch
 from agentsentinel.policy.diff_parser import (
     FilePatch,
     Hunk,
@@ -7,17 +8,16 @@ from agentsentinel.policy.diff_parser import (
     ParsedDiff,
     UnifiedDiffParser,
 )
-from agentsentinel.policy.validator import (
-    PatchPolicyValidator,
-    ValidationResult,
-)
+from agentsentinel.policy.validator import PatchPolicyValidator, ValidationResult
 
 __all__ = [
     "FilePatch",
     "Hunk",
     "HunkLine",
-    "ParsedDiff",
+    "PatchApplicationError",
     "PatchPolicyValidator",
+    "ParsedDiff",
     "UnifiedDiffParser",
     "ValidationResult",
+    "apply_validated_patch",
 ]

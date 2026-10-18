@@ -74,9 +74,9 @@ class TestHardenedContainerRunner:
         assert "--memory=512m" in args
         assert "--cpus=1.0" in args
 
-        # 6. Mounted workspace
+        # 6. Mounted workspace — read-only (:ro) for VFS-enforced immutability
         host_resolved = tmp_path.resolve().as_posix()
-        mount_arg = f"{host_resolved}:/workspace:rw"
+        mount_arg = f"{host_resolved}:/workspace:ro"
         assert "-v" in args
         assert mount_arg in args
 

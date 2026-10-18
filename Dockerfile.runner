@@ -1,0 +1,39 @@
+# AgentSentinel containerized test runner image.
+#
+# Build from python:3.11-slim with pytest pre-baked at the pinned version used by
+# the host project. This image is used by the HardenedContainerRunner so that
+# `python -m pytest` is available inside the --network=none sandbox without any
+# runtime pip-install calls.
+#
+# Build:
+#   docker build -t agentsentinel-runner:py311 -f Dockerfile.runner .
+#
+# Usage (managed by HardenedContainerRunner):
+#   docker run --rm --network=none --read-only \
+#     --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+#     --tmpfs /run:rw,noexec,nosuid,size=16m \
+#     --cap-drop=ALL --security-opt no-new-privileges \
+#     --pids-limit=64 --memory=512m --cpus=1.0 \
+#     -v /host/workspace:/workspace:ro \
+#     -w /workspace \
+#     -e PYTHONUNBUFFERED=1 -e PYTHONDONTWRITEBYTECODE=1 \
+#     -e PYTEST_ADDOPTS="-o cache_dir=/tmp/.pytest_cache" \
+#     agentsentinel-runner:py311 \
+#     sh -c "python -m pytest -q test_normalizer.py"
+
+FROM python:3.11-slim
+
+# Pin pytest version to match host pyproject.toml dev dependency
+# Using 8.4.x which is the latest stable in the 8.x series
+ARG PYTEST_VERSION=8.4.2
+
+# Install pytest (and its minimal transitive deps) with no cache to keep layers lean.
+# No other packages are installed: the container must run standalone test suites
+# that are entirely self-contained in /workspace.
+RUN pip install --no-cache-dir "pytest==${PYTEST_VERSION}"
+
+# Default working directory (overridden at runtime via -w /workspace)
+WORKDIR /workspace
+
+# No ENTRYPOINT: the runner builds the full command as a docker run argument list.
+CMD ["python", "-m", "pytest", "--help"]

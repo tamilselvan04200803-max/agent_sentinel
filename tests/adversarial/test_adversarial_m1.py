@@ -94,7 +94,7 @@ class TestAdversarialM1ContainerSecurity:
         # Ensure only a single volume mount exists (the workspace directory)
         vol_mounts = [args[i + 1] for i, x in enumerate(args) if x == "-v"]
         assert len(vol_mounts) == 1
-        assert vol_mounts[0].endswith(":/workspace:rw")
+        assert vol_mounts[0].endswith(":/workspace:ro")
 
     @pytest.mark.adversarial
     def test_security_check_6_infinite_loop_timeout_and_container_cleanup(
