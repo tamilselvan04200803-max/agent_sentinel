@@ -1,0 +1,18 @@
+diff --git a/test_paginator.py b/test_paginator.py
+new file mode 100644
+--- /dev/null
++++ b/test_paginator.py
+@@ -0,0 +1,13 @@
++from paginator import paginate
++
++
++def test_exact_pages():
++    assert paginate([1, 2, 3, 4], 2) == [[1, 2], [3, 4]]
++
++
++def test_partial_last_page():
++    assert paginate([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
++
++
++def test_empty():
++    assert paginate([], 2) == []

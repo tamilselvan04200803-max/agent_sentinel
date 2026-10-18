@@ -1,0 +1,19 @@
+diff --git a/test_config.py b/test_config.py
+new file mode 100644
+--- /dev/null
++++ b/test_config.py
+@@ -0,0 +1,11 @@
++from config import get_timeout
++
++
++def test_zero_timeout():
++    # 0 is a legitimate timeout (no waiting) but 'or default' treats it as falsy.
++    assert get_timeout(0) == 0
++
++
++def test_none_uses_default():
++    assert get_timeout(None) == 30
++
++
++def test_positive_passthrough():
++    assert get_timeout(60) == 60

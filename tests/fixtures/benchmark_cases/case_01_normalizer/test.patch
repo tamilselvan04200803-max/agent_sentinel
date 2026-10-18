@@ -1,0 +1,14 @@
+diff --git a/test_normalize.py b/test_normalize.py
+new file mode 100644
+--- /dev/null
++++ b/test_normalize.py
+@@ -0,0 +1,9 @@
++from normalizer import normalize
++
++
++def test_normalize_strips_whitespace():
++    assert normalize("  HELLO  ") == "hello"
++
++
++def test_normalize_basic():
++    assert normalize("Hello") == "hello"

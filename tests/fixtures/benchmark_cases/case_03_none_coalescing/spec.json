@@ -1,0 +1,8 @@
+{
+  "case_id": "case_03_none_coalescing",
+  "repo_url": "local://fixture",
+  "base_commit": "0000000000000000000000000000000000000003",
+  "test_command": "pytest",
+  "allowed_edit_paths": ["config.py"],
+  "failing_test_ids": ["test_config.py::test_zero_timeout"]
+}

@@ -1,0 +1,10 @@
+diff --git a/normalizer.py b/normalizer.py
+index 1ce5246..a4783dc 100644
+--- a/normalizer.py
++++ b/normalizer.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def normalize(s: str) -> str:
+-    return s.lower()
++    return s.strip().lower()
