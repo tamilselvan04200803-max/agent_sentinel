@@ -293,6 +293,23 @@ class HardenedContainerRunner:
             stdout_str = stdout_bytes.decode("utf-8", errors="replace")
             stderr_str = stderr_bytes.decode("utf-8", errors="replace")
 
+            # If Docker CLI or daemon failed to launch/run the container, this is a
+            # harness setup/infrastructure error, NOT a test failure.
+            daemon_error_indicators = (
+                "failed to connect to the docker api",
+                "cannot connect to the docker daemon",
+                "error during connect",
+                "open //./pipe/dockerdesktoplinuxengine",
+                "is the docker daemon running",
+                "unable to find image",
+            )
+            stderr_lower = stderr_str.lower()
+            if raw_exit_code != 0 and (
+                raw_exit_code == 125
+                or any(indicator in stderr_lower for indicator in daemon_error_indicators)
+            ):
+                raise HarnessSetupError(f"Docker container execution failed: {stderr_str.strip()}")
+
             # Map exit code to domain enum
             try:
                 exit_code_enum = classify(raw_exit_code)

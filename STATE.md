@@ -29,7 +29,10 @@
 | `tests/integration/test_docker_live_m1.py` | 6 live integration tests against real Docker daemon |
 
 ## Verification Evidence
-- Live Docker Tests: All 6 integration tests in `tests/integration/test_docker_live_m1.py` passing live with pre-baked `agentsentinel-runner:py311` image.
+- Full Test Suite: All unit and adversarial tests passing (305 passed, 8 skipped, 0 failed).
+- M5/M6 Test Fix: Resolved 10 failing tests in M5/M6 test suite:
+  - `container.py`: `run_in_container` detects Docker daemon connection failures or code 125 failures and raises `HarnessSetupError` rather than misclassifying infrastructure failure as `ExitCode.TESTS_FAILED`.
+  - `harness.py`: `_run_tests` checks `_is_docker_available()` before attempting container runs, and ensures host fallback pytest execution passes `-p no:schemathesis` to prevent plugin import errors in temporary workspaces.
 - Linter: `python -m ruff check src tests` (All checks passed, 0 errors).
 - Typecheck: `python -m mypy --strict src` (Success: no issues found in 28 source files).
 - Pre-M4 Applier Fix:
