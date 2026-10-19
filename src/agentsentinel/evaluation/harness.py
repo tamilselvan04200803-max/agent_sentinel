@@ -70,11 +70,37 @@ def _apply_patch_text(repo_path: Path, patch_text: str) -> None:
         )
 
 
+def _is_docker_available(image: str = "agentsentinel-runner:py311") -> bool:
+    """Return True iff docker daemon is responsive and the image is available locally."""
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(
+            ["docker", "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        if res.returncode != 0:
+            return False
+        img = subprocess.run(
+            ["docker", "image", "inspect", image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        return img.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def _run_tests(workspace: Path, test_command: str) -> ExecutionResult:
     # Admission and verification need per-test PASSED/FAILED markers.
     if test_command.startswith("pytest") and "-v" not in test_command.split():
         test_command = f"{test_command} -v -ra"
-    docker_present = shutil.which("docker") is not None
+    docker_present = _is_docker_available()
     start = time.perf_counter()
     if docker_present:
         docker_result: ExecutionResult | None = None
@@ -104,7 +130,10 @@ def _run_tests(workspace: Path, test_command: str) -> ExecutionResult:
     # when the venv is not activated in PATH.
     if isinstance(test_command, str):
         if test_command.startswith("pytest"):
-            argv: list[str] | str = [sys.executable, "-m", *test_command.split()]
+            cmd_args = test_command.split()[1:]
+            if "no:schemathesis" not in cmd_args:
+                cmd_args = ["-p", "no:schemathesis", *cmd_args]
+            argv: list[str] | str = [sys.executable, "-m", "pytest", *cmd_args]
             use_shell = False
         else:
             argv = test_command
@@ -112,7 +141,10 @@ def _run_tests(workspace: Path, test_command: str) -> ExecutionResult:
     else:
         argv = list(test_command)
         if argv and argv[0] == "pytest":
-            argv = [sys.executable, "-m", *argv]
+            cmd_args = argv[1:]
+            if "no:schemathesis" not in cmd_args:
+                cmd_args = ["-p", "no:schemathesis", *cmd_args]
+            argv = [sys.executable, "-m", "pytest", *cmd_args]
         use_shell = False
     proc = subprocess.run(
         argv,
@@ -326,7 +358,7 @@ class BenchmarkHarness:
         self._use_docker = use_docker
 
     def _make_runner(self) -> _Runner:
-        if self._use_docker and shutil.which("docker"):
+        if self._use_docker and _is_docker_available():
             return HardenedContainerRunner(ContainerConfig(
                 image="agentsentinel-runner:py311",
                 network_disabled=True,

@@ -1,0 +1,2 @@
+[console_scripts]
+agentsentinel = agentsentinel.cli.main:cli_entrypoint
