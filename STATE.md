@@ -2,12 +2,15 @@
 
 - **Current Active Milestone:** M8 (Anti-Overfitting, Anti-Poisoning & Anti-Reflection Guard) — complete
 - **Previous Milestones:** M7 (AST Fault Localizer & Image Digest Pinning), M6 (Production CLI & Exporter), M5 (Evaluation Harness) — complete
-- **Milestone Gate Status:** VERIFIED (Full ground-truth verification on Windows + live Docker Desktop: 368 passed, 1 skipped, 0 failures)
+- **Milestone Gate Status:** VERIFIED (Full ground-truth verification on Windows + live Docker Desktop: 369 passed, 1 skipped, 0 failures)
 
 ## Completed & Verified Components
 
 | File | Description |
 |---|---|
+| `src/agentsentinel/orchestrator/dedup.py` | Hardened Tier-2 AST dedup: `tier2_fingerprint` and `check_tier2_duplicate_or_noop` return `None` when zero `.py` files match in `allowed_edit_paths`, preventing false-positive empty-set hash collisions with baseline on Attempt 1. |
+| `src/agentsentinel/orchestrator/state_machine.py` | Captured pristine baseline AST hash prior to patch application in `_step_reproduce_baseline` and `_step_apply_patch`; handles `None` AST hashes gracefully by falling back to Tier-1 diff dedup. |
+| `src/agentsentinel/evaluation/harness.py` | Isolated SQLite databases per benchmark case in `_run_one_case` and per condition in `compare_baseline_vs_bounded_retry`, preventing cross-run hash collisions; enforced `PYTHONDONTWRITEBYTECODE=1` in test execution env. |
 | `src/agentsentinel/sandbox/container.py` | Real Docker image digest pinning via `resolve_image_digest(image_name)` executing `docker image inspect --format {{.Id}}`; gracefully returns `sha256:<64hex>` or `"sha256:unavailable"` when offline/mocked. |
 | `src/agentsentinel/localization/traceback_parser.py` | Deterministic traceback parser extracting repository frames from pytest output; normalizes Windows paths (`\` to `/`), filters out `tests/` and external `site-packages`, and restricts to `allowed_edit_paths`. |
 | `src/agentsentinel/localization/ast_slicer.py` | Hop-0 (enclosing FunctionDef/AsyncFunctionDef/ClassDef) and Hop-1 (intra-repo called symbols in allowlist) AST slicer extracting localized code snippets with 1-indexed line numbers. |

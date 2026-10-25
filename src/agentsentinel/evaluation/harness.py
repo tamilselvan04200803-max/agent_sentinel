@@ -126,6 +126,7 @@ def _run_tests(workspace: Path, test_command: str) -> ExecutionResult:
         if docker_result is not None:
             return docker_result
     env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPATH"] = str(workspace) + os.pathsep + env.get("PYTHONPATH", "")
     # Use the venv's Python interpreter so `pytest` resolves correctly even
     # when the venv is not activated in PATH.
@@ -375,7 +376,13 @@ class BenchmarkHarness:
     def _run_one_case(self, case: BenchmarkCase, verdict: AdmissionVerdict) -> CaseEvaluationResult:
         llm = self._llm_factory()
         source_ws = _provision(case.repo_source_path, [case.test_patch])
-        db = self._db_path or (Path(tempfile.mkdtemp(prefix="as_bench_")) / "c.db")
+        bench_tmp: Path | None = None
+        if self._db_path is not None:
+            case_slug = re.sub(r"[^\w\-]", "_", case.case_spec.case_id)
+            db = self._db_path.parent / f"{self._db_path.stem}_{case_slug}{self._db_path.suffix}"
+        else:
+            bench_tmp = Path(tempfile.mkdtemp(prefix="as_bench_"))
+            db = bench_tmp / "c.db"
         db.parent.mkdir(parents=True, exist_ok=True)
         runner = self._make_runner()
         sm = RepairStateMachine(
@@ -422,6 +429,8 @@ class BenchmarkHarness:
                     cost_total += att.cost_usd
         cost_val: float | None = None if any_unknown else cost_total
         shutil.rmtree(source_ws, ignore_errors=True)
+        if bench_tmp is not None:
+            shutil.rmtree(bench_tmp, ignore_errors=True)
         return CaseEvaluationResult(
             case_id=case.case_spec.case_id,
             admitted=True,
@@ -487,10 +496,24 @@ def compare_baseline_vs_bounded_retry(
     max_attempts_bounded: int = 5,
 ) -> ComparisonReport:
     cases = list(cases)
-    h1 = BenchmarkHarness(llm_factory=llm_factory, max_attempts=max_attempts_baseline)
-    r1 = h1.run_suite(cases, suite_name="single-proposal")
-    h2 = BenchmarkHarness(llm_factory=llm_factory, max_attempts=max_attempts_bounded)
-    r2 = h2.run_suite(cases, suite_name="bounded-retry")
+    bench_dir1 = Path(tempfile.mkdtemp(prefix="as_bench_baseline_"))
+    bench_dir2 = Path(tempfile.mkdtemp(prefix="as_bench_bounded_"))
+    try:
+        h1 = BenchmarkHarness(
+            llm_factory=llm_factory,
+            db_path=bench_dir1 / "baseline.db",
+            max_attempts=max_attempts_baseline,
+        )
+        r1 = h1.run_suite(cases, suite_name="single-proposal")
+        h2 = BenchmarkHarness(
+            llm_factory=llm_factory,
+            db_path=bench_dir2 / "bounded.db",
+            max_attempts=max_attempts_bounded,
+        )
+        r2 = h2.run_suite(cases, suite_name="bounded-retry")
+    finally:
+        shutil.rmtree(bench_dir1, ignore_errors=True)
+        shutil.rmtree(bench_dir2, ignore_errors=True)
     calls1 = sum(r.attempts_used for r in r1.per_case_results if r.admitted)
     calls2 = sum(r.attempts_used for r in r2.per_case_results if r.admitted)
     return ComparisonReport(

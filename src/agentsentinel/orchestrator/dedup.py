@@ -156,7 +156,7 @@ def _ast_fingerprint_for_file(path: Path) -> str | None:
 def tier2_fingerprint(
     workspace_root: Path,
     allowed_edit_paths: Iterable[str],
-) -> Tier2Fingerprint:
+) -> Tier2Fingerprint | None:
     """Compute the aggregate AST fingerprint across ``allowed_edit_paths`` after
     a patch has been applied to ``workspace_root``.
 
@@ -173,6 +173,9 @@ def tier2_fingerprint(
         digest = _ast_fingerprint_for_file(fp)
         if digest is not None:
             per_file.append((rel, digest))
+
+    if not per_file:
+        return None
 
     per_file.sort()
     aggregate_src = "\n".join(f"{rel}:{dig}" for rel, dig in per_file)
@@ -209,7 +212,7 @@ def check_tier2_duplicate_or_noop(
     allowed_edit_paths: Iterable[str],
     baseline_ast_hash: str | None,
     seen_ast_hashes: set[str],
-) -> Tier2Fingerprint:
+) -> Tier2Fingerprint | None:
     """Check the post-patch AST fingerprint against baseline and prior attempts.
 
     Raises :class:`DuplicatePatchError` if:
@@ -219,6 +222,8 @@ def check_tier2_duplicate_or_noop(
       semantically identical program).
     """
     fp = tier2_fingerprint(workspace_root, allowed_edit_paths)
+    if fp is None:
+        return None
     if baseline_ast_hash is not None and fp.hex == baseline_ast_hash:
         raise DuplicatePatchError(
             "post-patch AST equals baseline AST (patch was semantically a no-op)",

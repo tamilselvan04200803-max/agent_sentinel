@@ -163,7 +163,9 @@ class TestDedup:
         (tmp_path / "a.py").write_text(
             "def f(x):\n    return x + 1\n", encoding="utf-8"
         )
-        baseline = tier2_fingerprint(tmp_path, ("a.py",)).hex
+        fp_baseline = tier2_fingerprint(tmp_path, ("a.py",))
+        assert fp_baseline is not None
+        baseline = fp_baseline.hex
         # A comment-only patch would change file but not AST; here we simply
         # point at unchanged workspace to show duplicate detection vs. baseline.
         with pytest.raises(DuplicatePatchError):
@@ -176,7 +178,9 @@ class TestDedup:
         (tmp_path / "a.py").write_text(
             "def f(x):\n    return x + 1\n", encoding="utf-8"
         )
-        baseline = tier2_fingerprint(tmp_path, ("a.py",)).hex
+        fp_baseline = tier2_fingerprint(tmp_path, ("a.py",))
+        assert fp_baseline is not None
+        baseline = fp_baseline.hex
         # Now change semantics
         (tmp_path / "a.py").write_text(
             "def f(x):\n    return x + 2\n", encoding="utf-8"
@@ -184,7 +188,23 @@ class TestDedup:
         fp = check_tier2_duplicate_or_noop(
             tmp_path, ("a.py",), baseline_ast_hash=baseline, seen_ast_hashes=set()
         )
+        assert fp is not None
         assert fp.hex != baseline
+
+    @pytest.mark.unit
+    def test_tier2_empty_or_no_py_files_returns_none(self, tmp_path: Path) -> None:
+        (tmp_path / "readme.txt").write_text("hello", encoding="utf-8")
+        assert tier2_fingerprint(tmp_path, ("readme.txt",)) is None
+        assert tier2_fingerprint(tmp_path, ("nonexistent.py",)) is None
+        assert (
+            check_tier2_duplicate_or_noop(
+                tmp_path,
+                ("readme.txt",),
+                baseline_ast_hash="dummy",
+                seen_ast_hashes=set(),
+            )
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------

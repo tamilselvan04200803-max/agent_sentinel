@@ -463,6 +463,7 @@ class RepairStateMachine:
         # _source_workspace (see _get_source_workspace).
         try:
             src = self._get_source_workspace()
+            self._get_baseline_ast_hash(src)
             self._ws_mgr.populate_from_directory(src, baseline_ws)
             self._ws_mgr.scrub_git_history(baseline_ws)
 
@@ -736,6 +737,9 @@ class RepairStateMachine:
             )
             return
 
+        # Capture baseline AST hash on pristine source workspace before application
+        baseline_ast_hash = self._get_baseline_ast_hash(src)
+
         # Provision patched workspace + apply via git apply (hard-fail)
         patched_dir = tempfile.mkdtemp(prefix="agentsentinel_apply_")
         patched_ws = Path(patched_dir)
@@ -785,8 +789,6 @@ class RepairStateMachine:
         # Tier-2 AST dedup BEFORE running Docker
         seen_diff, seen_ast = self._store.get_seen_hashes(run_id)
         try:
-            # Baseline AST hash captured lazily on first attempt & persisted
-            baseline_ast_hash = self._get_baseline_ast_hash(src)
             t2 = check_tier2_duplicate_or_noop(
                 patched_ws,
                 self.spec.allowed_edit_paths,
@@ -801,10 +803,9 @@ class RepairStateMachine:
                 error_type="DuplicatePatchError",
                 error_detail=str(e),
             )
-            self._store.add_seen_ast_hash(
-                run_id,
-                tier2_fingerprint(patched_ws, self.spec.allowed_edit_paths).hex,
-            )
+            fp_err = tier2_fingerprint(patched_ws, self.spec.allowed_edit_paths)
+            if fp_err is not None:
+                self._store.add_seen_ast_hash(run_id, fp_err.hex)
             shutil.rmtree(patched_ws, ignore_errors=True)
             self._store.set_termination(
                 run_id,
@@ -813,7 +814,8 @@ class RepairStateMachine:
             )
             raise
 
-        self._store.add_seen_ast_hash(run_id, t2.hex)
+        if t2 is not None:
+            self._store.add_seen_ast_hash(run_id, t2.hex)
 
         # M8: Anti-overfitting AST guard — after Tier-2, before container
         if self.enforce_overfit_guard:
@@ -860,7 +862,8 @@ class RepairStateMachine:
     def _get_baseline_ast_hash(self, src: Path) -> str | None:
         cached: str | None = getattr(self, "_baseline_ast_hash", None)
         if cached is None:
-            cached = tier2_fingerprint(src, self.spec.allowed_edit_paths).hex
+            fp = tier2_fingerprint(src, self.spec.allowed_edit_paths)
+            cached = fp.hex if fp is not None else None
             self._baseline_ast_hash = cached
         return cached
 
