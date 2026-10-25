@@ -81,7 +81,7 @@ def _write_patch_file(diff_text: str) -> str:
 
 
 def _git_apply(patch_file: str, workspace: Path, check_only: bool) -> tuple[bool, str]:
-    """Run ``git apply [--check] --ignore-space-change --whitespace=nowarn``.
+    """Run ``git apply [--check] -v --ignore-space-change --whitespace=nowarn``.
 
     Returns ``(succeeded, stderr_text)``. Raises :class:`FileNotFoundError` if
     the ``git`` executable is not available on PATH (caller converts to
@@ -90,6 +90,7 @@ def _git_apply(patch_file: str, workspace: Path, check_only: bool) -> tuple[bool
     cmd = [
         "git",
         "apply",
+        "-v",
         "--ignore-space-change",
         "--whitespace=nowarn",
     ]
@@ -105,7 +106,10 @@ def _git_apply(patch_file: str, workspace: Path, check_only: bool) -> tuple[bool
         timeout=15.0,
         check=False,
     )
-    return result.returncode == 0, (result.stderr or result.stdout or "").strip()
+    stderr = (result.stderr or result.stdout or "").strip()
+    if result.returncode != 0 or "Skipped patch" in stderr:
+        return False, stderr
+    return True, stderr
 
 
 def _git_apply_with_fallback(
@@ -126,32 +130,41 @@ def _git_apply_with_fallback(
     HarnessSetupError
         If ``git`` is not installed.
     """
-    # 1. Dry-run verification
+    had_git = (workspace / ".git").exists()
+    if not had_git:
+        subprocess.run(["git", "init"], cwd=str(workspace), capture_output=True, check=False)
+        subprocess.run(["git", "add", "."], cwd=str(workspace), capture_output=True, check=False)
+
     try:
-        ok, err = _git_apply(patch_file, workspace, check_only=True)
-    except FileNotFoundError as exc:
-        raise HarnessSetupError(
-            "git executable not found on host; git apply is required for "
-            "deterministic patch application. Install git and retry."
-        ) from exc
+        # 1. Dry-run verification
+        try:
+            ok, err = _git_apply(patch_file, workspace, check_only=True)
+        except FileNotFoundError as exc:
+            raise HarnessSetupError(
+                "git executable not found on host; git apply is required for "
+                "deterministic patch application. Install git and retry."
+            ) from exc
 
-    if not ok:
-        raise PatchApplicationError(
-            "git apply --check rejected the patch (context mismatch, corrupt "
-            "hunks, or missing files). The patch was NOT applied.",
-            stderr=err,
-        )
+        if not ok:
+            raise PatchApplicationError(
+                "git apply --check rejected the patch (context mismatch, corrupt "
+                "hunks, or missing files). The patch was NOT applied.",
+                stderr=err,
+            )
 
-    # 2. Actual application
-    ok, err = _git_apply(patch_file, workspace, check_only=False)
-    if not ok:
-        raise PatchApplicationError(
-            "git apply failed during actual application after passing --check. "
-            "Workspace may be in an inconsistent state.",
-            stderr=err,
-        )
+        # 2. Actual application
+        ok, err = _git_apply(patch_file, workspace, check_only=False)
+        if not ok:
+            raise PatchApplicationError(
+                "git apply failed during actual application after passing --check. "
+                "Workspace may be in an inconsistent state.",
+                stderr=err,
+            )
 
-    return True, ""
+        return True, ""
+    finally:
+        if not had_git:
+            WorkspaceManager().scrub_git_history(workspace)
 
 
 def apply_validated_patch(

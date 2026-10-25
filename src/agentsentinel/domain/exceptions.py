@@ -191,3 +191,27 @@ class UnapprovedExportError(OrchestratorError):
         super().__init__(
             f"Cannot export evidence bundle: run state is {state!r}, expected 'APPROVED'."
         )
+
+
+class OverfitPolicyError(PatchPolicyError):
+    """Raised when a patch contains overfit literals leaked from tests."""
+
+    leaked_literal: str = ""
+    file_path: str = ""
+
+    def __init__(
+        self,
+        leaked_literal: str = "",
+        file_path: str = "",
+        message: str = "",
+    ) -> None:
+        self.leaked_literal = leaked_literal
+        self.file_path = file_path
+        if message:
+            super().__init__(message)
+        elif leaked_literal or file_path:
+            super().__init__(
+                f"Overfit policy violation: leaked_literal={leaked_literal!r} in {file_path!r}"
+            )
+        else:
+            super().__init__("Overfit policy violation")

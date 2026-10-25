@@ -38,6 +38,7 @@ from agentsentinel.orchestrator.checkpoint import (
 )
 from agentsentinel.orchestrator.state_machine import RepairStateMachine
 from agentsentinel.sandbox.container import ContainerConfig, HardenedContainerRunner
+from agentsentinel.sandbox.workspace import WorkspaceManager
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -193,6 +194,7 @@ def _all_reported(output: str, test_ids: tuple[str, ...], marker: str) -> bool:
 
 def _provision(src: Path, patches: Sequence[str]) -> Path:
     tmp = Path(tempfile.mkdtemp(prefix="agentsentinel_harness_"))
+    subprocess.run(["git", "init"], cwd=tmp, capture_output=True, check=False)
     for item in src.iterdir():
         if item.name == ".git":
             continue
@@ -201,8 +203,10 @@ def _provision(src: Path, patches: Sequence[str]) -> Path:
             shutil.copytree(item, dest)
         else:
             shutil.copy2(item, dest)
+    subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True, check=False)
     for p in patches:
         _apply_patch_text(tmp, p)
+    WorkspaceManager().scrub_git_history(tmp)
     return tmp
 
 

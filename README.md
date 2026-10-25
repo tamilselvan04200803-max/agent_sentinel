@@ -15,12 +15,16 @@ auditable — including the failures.
 ```text
 CaseSpec
   -> baseline reproduction gate (tests must fail for the declared reason)
+  -> AST fault localization (Hop-0 and Hop-1 repository call frames)
+  -> sanitized prompt generation (BiDi / injection strip)
   -> LLM patch proposal
   -> policy validation (allowlist, diff structure, protected paths)
+  -> patch hygiene check (BiDi, zero-width, non-ASCII ids, mixed indentation)
   -> Tier-1 canonical-diff dedup
   -> git apply (hard fail on rejected hunks; no silent fallback)
   -> Tier-2 Python AST equivalence dedup (rejects semantic no-ops)
-  -> sandbox verification (fresh workspace per attempt)
+  -> M8 anti-overfitting & anti-reflection guard (constant-folding test literal match)
+  -> sandbox verification (fresh workspace per attempt, pinned image digest)
   -> AWAITING_HUMAN_APPROVAL
   -> approve / reject using sha256(diff_hash + image_digest + post_patch_hash)
   -> deterministic evidence bundle export (APPROVED runs only)
@@ -37,6 +41,8 @@ CaseSpec
 | M4 | Bounded repair state machine and SQLite checkpoints | Complete |
 | M5 | Contamination-aware evaluation harness | Complete |
 | M6 | Production CLI and deterministic evidence exporter | Complete |
+| M7 | Deterministic AST fault localizer & live image digest pinning | Complete |
+| M8 | Anti-overfitting, anti-poisoning & anti-reflection security kernel | Complete |
 
 ## Safety and correctness invariants
 

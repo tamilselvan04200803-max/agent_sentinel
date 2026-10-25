@@ -11,7 +11,8 @@ Security boundaries enforced here:
   allowlist are NEVER included.
 - All file content is rendered with explicit 1-indexed line numbers so the LLM
   does not hallucinate hunk line counts when generating a unified diff.
-- Prompt injection guards strip triple-backtick sequences from user content.
+- Prompt injection guards strip triple-backtick sequences and Unicode BiDi/control
+  poisoning characters from user content.
 
 Output format:
   Structured text prompt suitable for any instruction-tuned LLM.
@@ -21,13 +22,16 @@ Output format:
 
 from __future__ import annotations
 
+import re
 import textwrap
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     from agentsentinel.domain.models import CaseSpec, ExecutionResult
+    from agentsentinel.localization.ast_slicer import LocalizationSlice
 
 # Sentinel used to mark truncated file content in prompts.
 _TRUNCATION_MARKER = "... [TRUNCATED — file exceeds prompt size limit]"
@@ -56,10 +60,11 @@ def _add_line_numbers(source: str) -> str:
 
 
 def _sanitize_content(content: str) -> str:
-    """Remove prompt-injection vectors from file content.
+    """Remove prompt-injection vectors and poisoning from content.
 
     Strips triple-backtick sequences (which could break the prompt's markdown
-    fencing) and replaces them with a safe marker.
+    fencing) and replaces them with a safe marker, and strips Unicode BiDi
+    and zero-width control characters.
 
     Parameters
     ----------
@@ -71,8 +76,9 @@ def _sanitize_content(content: str) -> str:
     str
         Sanitized content safe for embedding in a prompt.
     """
-    # Replace triple backticks with visually similar but non-functional marker
-    return content.replace("```", "'''")
+    sanitized = content.replace("```", "'''")
+    # Strip Unicode BiDi and zero-width characters
+    return re.sub(r"[\u200b-\u200d\ufeff\u202a-\u202e\u2066-\u2069]", "", sanitized)
 
 
 def _read_file_safe(path: Path, max_chars: int = _MAX_FILE_CHARS) -> tuple[str, bool]:
@@ -124,6 +130,7 @@ class PromptBuilder:
         self,
         spec: CaseSpec,
         baseline_result: ExecutionResult,
+        localization_slices: Sequence[LocalizationSlice] | None = None,
     ) -> str:
         """Build a structured repair prompt for the LLM.
 
@@ -133,6 +140,8 @@ class PromptBuilder:
             The bug case descriptor (allowlist, failing tests, command, etc.).
         baseline_result:
             The execution result of the unpatched baseline (must be TESTS_FAILED).
+        localization_slices:
+            Optional AST localization slices to provide targeted fault hints.
 
         Returns
         -------
@@ -226,6 +235,22 @@ class PromptBuilder:
         if source_sections:
             sections.append("## SOURCE FILES\n" + "\n".join(source_sections))
 
+        # ── Fault localization hints ──────────────────────────────────────
+        if localization_slices:
+            slice_blocks: list[str] = []
+            for sl in localization_slices:
+                header = (
+                    f"### File: `{sl.file_path}` — symbol `{sl.symbol_name}` "
+                    f"(lines {sl.start_line}-{sl.end_line}, hop {sl.hop_distance})"
+                )
+                safe_numbered = _sanitize_content(sl.numbered_source)
+                slice_blocks.append(f"{header}\n```\n{safe_numbered}\n```")
+            sections.append(
+                "## Fault Localization Hints (AST Slice)\n"
+                + "\n".join(slice_blocks)
+                + "\n"
+            )
+
         # ── Output format instruction ───────────────────────────────────────
         sections.append(textwrap.dedent("""\
             ## REQUIRED OUTPUT FORMAT
@@ -243,6 +268,16 @@ class PromptBuilder:
         """))
 
         return "\n".join(sections)
+
+    # Alias for backwards compatibility — mirrors build_repair_prompt
+    def build_patch_prompt(
+        self,
+        spec: CaseSpec,
+        baseline_result: ExecutionResult,
+        localization_slices: Sequence[LocalizationSlice] | None = None,
+    ) -> str:
+        """Alias for :meth:`build_repair_prompt`."""
+        return self.build_repair_prompt(spec, baseline_result, localization_slices)
 
     def estimate_prompt_tokens(self, prompt: str, chars_per_token: float = 4.0) -> int:
         """Estimate prompt token count from character length.

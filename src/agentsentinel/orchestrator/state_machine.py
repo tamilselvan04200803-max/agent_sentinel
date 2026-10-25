@@ -50,6 +50,7 @@ from agentsentinel.domain.exceptions import (
     HarnessSetupError,
     HarnessTimeoutError,
     InfrastructureFailureError,
+    PatchPolicyError,
     UnapprovedExportError,
 )
 from agentsentinel.domain.exit_codes import ExitCode, is_harness_broken
@@ -68,6 +69,8 @@ from agentsentinel.llm.exceptions import (
 )
 from agentsentinel.llm.pricing import CostEstimate, ModelUsage, PricingRegistry
 from agentsentinel.llm.prompts import PromptBuilder
+from agentsentinel.localization.ast_slicer import localize_faults
+from agentsentinel.localization.traceback_parser import extract_traceback_frames
 from agentsentinel.orchestrator.checkpoint import (
     AttemptStatus,
     CheckpointStore,
@@ -83,8 +86,13 @@ from agentsentinel.orchestrator.dedup import (
 )
 from agentsentinel.policy.applier import PatchApplicationError, apply_validated_patch
 from agentsentinel.policy.validator import PatchPolicyValidator
-from agentsentinel.sandbox.container import ContainerConfig, HardenedContainerRunner
+from agentsentinel.sandbox.container import (
+    ContainerConfig,
+    HardenedContainerRunner,
+    resolve_image_digest,
+)
 from agentsentinel.sandbox.workspace import WorkspaceManager
+from agentsentinel.verification.overfit_guard import verify_not_overfitted
 
 if TYPE_CHECKING:
     from agentsentinel.llm.client import LLMClient
@@ -219,10 +227,13 @@ class RepairStateMachine:
     image_digest: str = "sha256:unspecified"
     auto_approve_on_fix: bool = False
     source_workspace_override: Path | None = None
+    enforce_overfit_guard: bool = True
 
     def __post_init__(self) -> None:
         if self.container_runner is None:
             self.container_runner = HardenedContainerRunner(self.container_config)
+        if self.image_digest == "sha256:unspecified":
+            self.image_digest = resolve_image_digest(self.container_config.image)
         self._store = CheckpointStore(self.db_path)
         self._ws_mgr = WorkspaceManager()
         self._pending_patched_ws: Path | None = None
@@ -532,7 +543,23 @@ class RepairStateMachine:
             stderr_truncated=baseline_dict.get("stderr_truncated", False),
             expected_test_ids=self.spec.failing_test_ids,
         )
-        prompt = pb.build_repair_prompt(self.spec, baseline_result)
+        # Fault localization hints (best-effort; empty on parse failure)
+        localization_slices = None
+        try:
+            _frames = extract_traceback_frames(
+                baseline_result.stdout,
+                baseline_result.stderr,
+                allowed_edit_paths=self.spec.allowed_edit_paths,
+            )
+            if _frames:
+                localization_slices = localize_faults(
+                    src, _frames, self.spec.allowed_edit_paths
+                )
+        except Exception:
+            localization_slices = None
+        prompt = pb.build_repair_prompt(
+            self.spec, baseline_result, localization_slices=localization_slices
+        )
         if feedback is not None:
             prompt += "\n" + feedback.to_prompt_block()
 
@@ -787,6 +814,42 @@ class RepairStateMachine:
             raise
 
         self._store.add_seen_ast_hash(run_id, t2.hex)
+
+        # M8: Anti-overfitting AST guard — after Tier-2, before container
+        if self.enforce_overfit_guard:
+            try:
+                _pre: dict[str, str] = {}
+                _post: dict[str, str] = {}
+                for _rel in self.spec.allowed_edit_paths:
+                    try:
+                        _pre[_rel] = (src / _rel).read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        _pre[_rel] = ""
+                    try:
+                        _post[_rel] = patched_ws.joinpath(_rel).read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                    except OSError:
+                        _post[_rel] = ""
+                verify_not_overfitted(src, _pre, _post, raw_diff=patch.unified_diff)
+            except PatchPolicyError as _e:
+                self._store.record_attempt_outcome(
+                    run_id,
+                    current_attempt,
+                    AttemptStatus.POLICY_REJECTED,
+                    error_type=type(_e).__name__,
+                    error_detail=str(_e),
+                )
+                shutil.rmtree(patched_ws, ignore_errors=True)
+                self._maybe_advance_after_failure(
+                    run_id,
+                    current_attempt,
+                    stage="VALIDATING_POLICY",
+                    error_type=type(_e).__name__,
+                    error_detail=str(_e),
+                )
+                return
+
         # Move to sandbox verification (hand patched_ws to next step via attr)
         self._pending_patched_ws = patched_ws
         self._pending_patch = patch

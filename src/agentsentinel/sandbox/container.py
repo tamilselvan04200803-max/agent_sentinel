@@ -44,6 +44,29 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_OUTPUT_BYTES = 262_144  # 256 KB
 
 
+def resolve_image_digest(image_name: str, timeout_seconds: float = 5.0) -> str:
+    """Resolve the image digest via ``docker image inspect``.
+
+    Runs ``docker image inspect --format {{.Id}} <image_name>`` and returns
+    the stripped ``sha256:...`` string when the command succeeds and output
+    starts with ``sha256:``, otherwise returns ``"sha256:unavailable"``.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image_name],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        output: str = result.stdout.strip() if result.stdout else ""
+        if result.returncode == 0 and output.startswith("sha256:"):
+            return output
+        return "sha256:unavailable"
+    except Exception:
+        return "sha256:unavailable"
+
+
 @dataclass(frozen=True)
 class ContainerConfig:
     """Security and resource limits configuration for the container sandbox.
