@@ -6,6 +6,7 @@ import ast
 from typing import TYPE_CHECKING
 
 from agentsentinel.domain.exceptions import OverfitPolicyError
+from agentsentinel.verification.patch_minimizer import check_ast_bloat_and_debug_residue
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -441,6 +442,8 @@ def verify_not_overfitted(
             post_tree = ast.parse(post_src, filename=file_path)
         except SyntaxError:
             continue
+
+        check_ast_bloat_and_debug_residue(file_path, pre_src, post_src)
 
         pre_dumps = _collect_branch_test_dumps(pre_tree)
         pre_constants = _collect_all_folded_constants(pre_tree)

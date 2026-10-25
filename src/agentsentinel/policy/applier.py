@@ -37,6 +37,7 @@ from agentsentinel.domain.exceptions import (
     HarnessSetupError,
     SymlinkEscapeError,
 )
+from agentsentinel.policy.diff_healer import heal_diff_line_numbers
 from agentsentinel.policy.diff_parser import ParsedDiff, UnifiedDiffParser
 from agentsentinel.policy.validator import PatchPolicyValidator
 from agentsentinel.sandbox.workspace import WorkspaceManager
@@ -113,20 +114,23 @@ def _git_apply(patch_file: str, workspace: Path, check_only: bool) -> tuple[bool
 
 
 def _git_apply_with_fallback(
-    patch_file: str, workspace: Path
+    patch_file: str, workspace: Path, raw_diff: str
 ) -> tuple[bool, str]:
     """Verify patch applicability with ``git apply --check`` then apply it.
 
-    On ``--check`` failure we raise a descriptive error. On successful check
-    we run ``git apply`` (without ``--check``) to actually apply the patch.
+    On ``--check`` failure, first attempts deterministic line-number healing
+    via :func:`heal_diff_line_numbers`. If healing succeeds and the re-checked
+    patch passes, that healed diff is applied. If healing fails (ambiguous or
+    corrupt context) or the healed patch still fails ``--check``, raises
+    :class:`PatchApplicationError` immediately.
 
     Returns ``(True, "")`` on success.
 
     Raises
     ------
     PatchApplicationError
-        If either step fails — the error message includes git's stderr for
-        diagnostics to feed back to the LLM on the next attempt.
+        If either the original or healed patch fails ``--check`` or application.
+        The error message includes git's stderr for diagnostics.
     HarnessSetupError
         If ``git`` is not installed.
     """
@@ -146,6 +150,33 @@ def _git_apply_with_fallback(
             ) from exc
 
         if not ok:
+            # Attempt deterministic line-number healing
+            heal_result = heal_diff_line_numbers(raw_diff, workspace)
+            if heal_result.was_healed:
+                # Re-check with the healed diff
+                healed_patch_file = _write_patch_file(heal_result.healed_diff)
+                try:
+                    ok_healed, err_healed = _git_apply(
+                        healed_patch_file, workspace, check_only=True
+                    )
+                    if ok_healed:
+                        # Apply the healed diff
+                        ok_apply, err_apply = _git_apply(
+                            healed_patch_file, workspace, check_only=False
+                        )
+                        if not ok_apply:
+                            raise PatchApplicationError(
+                                "git apply failed during actual application of healed "
+                                "patch. Workspace may be in an inconsistent state.",
+                                stderr=err_apply,
+                            )
+                        return True, ""
+                    # Healed diff still fails --check — fall through to error
+                    err = err_healed
+                finally:
+                    with contextlib.suppress(OSError):
+                        Path(healed_patch_file).unlink()
+            # No healing available or healing failed — raise original error
             raise PatchApplicationError(
                 "git apply --check rejected the patch (context mismatch, corrupt "
                 "hunks, or missing files). The patch was NOT applied.",
@@ -236,7 +267,7 @@ def apply_validated_patch(
     # Step 4: Write patch to a temp file with strict newline="\n" and apply via git
     patch_file = _write_patch_file(patch.unified_diff)
     try:
-        _git_apply_with_fallback(patch_file, patched_ws)
+        _git_apply_with_fallback(patch_file, patched_ws, patch.unified_diff)
     finally:
         with contextlib.suppress(OSError):
             Path(patch_file).unlink()
