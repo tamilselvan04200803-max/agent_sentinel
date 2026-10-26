@@ -1,0 +1,286 @@
+"""Execute mutation probes in disposable container-only shadow workspaces."""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import PurePosixPath, PureWindowsPath
+from typing import TYPE_CHECKING, Protocol
+
+from agentsentinel.domain.exceptions import HarnessSetupError, HarnessTimeoutError
+from agentsentinel.domain.exit_codes import ExitCode
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
+
+    from agentsentinel.domain.models import ExecutionResult
+    from agentsentinel.verification.differential_mutation import DifferentialPatchMutant
+
+_MARKER = "AGENTSENTINEL_MUTATION_V1:"
+
+
+class ContainerRunnerProtocol(Protocol):
+    """Existing sandbox boundary; this helper never executes project code locally."""
+
+    def run_in_container(
+        self,
+        case_id: str,
+        patch_diff_hash: str,
+        workspace_host_path: Path,
+        command: str | list[str],
+    ) -> ExecutionResult: ...
+
+
+def build_mutation_batch_script() -> str:
+    """Return a standalone stdlib wrapper intended exclusively for a Linux container.
+
+    Child streams never reach the reserved protocol channel. A new copy is made
+    for every mutant, and all members of its process group die before cleanup.
+    """
+    return r'''
+import ctypes
+import importlib
+import json
+import math
+import os
+from pathlib import Path, PurePosixPath, PureWindowsPath
+import shutil
+import signal
+import subprocess
+import sys
+
+SOURCE = Path("/workspace")
+SHADOW = Path("/tmp/mut_workspace")
+MARKER = "AGENTSENTINEL_MUTATION_V1:"
+
+
+def relative_path(value):
+    if (not isinstance(value, str) or not value or "\\" in value
+            or "\0" in value or PurePosixPath(value).is_absolute()
+            or PureWindowsPath(value).drive
+            or any(part in ("", ".", "..") for part in value.split("/"))):
+        raise ValueError("unsafe relative path")
+    return value
+
+
+def become_subreaper():
+    # Linux PR_SET_CHILD_SUBREAPER: adopt grandchildren so they can be reaped.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "subreaper setup failed")
+
+
+def reset_shadow():
+    if SHADOW.is_symlink():
+        SHADOW.unlink()
+    elif SHADOW.exists():
+        shutil.rmtree(SHADOW)
+
+
+def copy_shadow():
+    root = SOURCE.resolve(strict=True)
+    links = []
+    # Inspect links without following directory links, preventing cycles and
+    # accidental reads outside the read-only mount during the actual copy.
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs + files:
+            path = Path(directory) / name
+            if path.is_symlink():
+                resolved = path.resolve(strict=True)
+                if not resolved.is_relative_to(root):
+                    raise ValueError("source symlink escapes workspace")
+                links.append((path.relative_to(root), resolved.relative_to(root)))
+    shutil.copytree(root, SHADOW, symlinks=True)
+    # Remap even absolute internal source links into the disposable tree.
+    for relative, target in links:
+        copied = SHADOW / relative
+        copied.unlink()
+        copied.symlink_to(os.path.relpath(SHADOW / target, copied.parent))
+
+
+def stop_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        # A child without descendants may already have been fully reaped.
+        ...
+    process.wait(timeout=2.0)
+    # The subreaper owns surviving grandchildren after their parent exits.
+    while True:
+        try:
+            os.waitpid(-process.pid, 0)
+        except ChildProcessError:
+            break
+
+
+def evaluate(mutant, test_ids, timeout):
+    reset_shadow()
+    try:
+        copy_shadow()
+        relative = relative_path(mutant["file_path"])
+        target = (SHADOW / relative).resolve(strict=True)
+        if not target.is_relative_to(SHADOW.resolve()) or not target.is_file():
+            raise ValueError("mutant target escapes shadow workspace")
+        source = mutant["mutated_source"]
+        if not isinstance(source, str):
+            raise ValueError("mutated source must be text")
+        target.write_text(source, encoding="utf-8")
+        for directory, dirs, files in os.walk(SHADOW, followlinks=False):
+            if "__pycache__" in dirs:
+                cache = Path(directory) / "__pycache__"
+                if cache.is_symlink():
+                    cache.unlink()
+                else:
+                    shutil.rmtree(cache)
+                dirs.remove("__pycache__")
+        importlib.invalidate_caches()
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join((str(SHADOW / "src"), str(SHADOW)))
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        process = subprocess.Popen(
+            [sys.executable, "-B", "-m", "pytest", "-x", "--tb=no", "-q", "--", *test_ids],
+            cwd=SHADOW, env=environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        try:
+            try:
+                code = process.wait(timeout=timeout)
+                outcome = "survived" if code == 0 else "killed"
+            except subprocess.TimeoutExpired:
+                outcome = "killed"
+        finally:
+            stop_group(process)
+        return outcome
+    finally:
+        reset_shadow()
+
+
+def main(serialized):
+    status = {"status": "setup_error"}
+    code = 3
+    try:
+        payload = json.loads(serialized)
+        timeout = payload["timeout_seconds"]
+        if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 1:
+            raise ValueError("invalid timeout")
+        test_ids = payload["failing_test_ids"]
+        if not isinstance(test_ids, list) or not test_ids:
+            raise ValueError("missing tests")
+        for test_id in test_ids:
+            if not isinstance(test_id, str) or "\0" in test_id:
+                raise ValueError("invalid test id")
+            relative_path(test_id.split("::", 1)[0])
+        mutants = payload["mutants"]
+        if not isinstance(mutants, list):
+            raise ValueError("invalid mutants")
+        become_subreaper()
+        outcomes = [evaluate(mutant, test_ids, timeout) for mutant in mutants]
+        status = {"status": "ok", "outcomes": outcomes}
+        code = 0
+    except Exception:
+        # Exception messages and child-controlled output are never protocol data.
+        status = {"status": "setup_error"}
+        code = 3
+    finally:
+        try:
+            reset_shadow()
+        except Exception:
+            status = {"status": "setup_error"}
+            code = 3
+    print(MARKER + json.dumps(status, separators=(",", ":")), flush=True)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1]))
+'''.lstrip()
+
+
+def _validate_relative_path(value: str) -> None:
+    if (
+        not value
+        or "\\" in value
+        or "\0" in value
+        or PurePosixPath(value).is_absolute()
+        or PureWindowsPath(value).drive
+        or any(part in ("", ".", "..") for part in value.split("/"))
+    ):
+        raise ValueError(f"Unsafe mutation probe path: {value!r}")
+
+
+def _read_outcome(result: ExecutionResult, case_id: str, patch_diff_hash: str) -> bool:
+    if (
+        result.exit_code != ExitCode.OK
+        or result.stdout_truncated
+        or result.stderr_truncated
+        or result.case_id != case_id
+        or result.patch_diff_hash != patch_diff_hash
+        or not result.stdout.startswith(_MARKER)
+    ):
+        raise HarnessSetupError("Mutation wrapper failed or returned an untrusted report")
+    # The wrapper has two canonical success records. Exact comparison rejects
+    # duplicate JSON keys, appended/spoofed reports, and every partial record.
+    reports = {
+        _MARKER + '{"status":"ok","outcomes":["killed"]}': True,
+        _MARKER + '{"status":"ok","outcomes":["survived"]}': False,
+    }
+    record = result.stdout.removesuffix("\n")
+    if record not in reports:
+        raise HarnessSetupError("Mutation wrapper did not return a complete singleton verdict")
+    return reports[record]
+
+
+def run_in_container_mutation_batch(
+    *,
+    runner: ContainerRunnerProtocol,
+    case_id: str,
+    patch_diff_hash: str,
+    workspace_host_path: Path,
+    mutants: Sequence[DifferentialPatchMutant],
+    failing_test_ids: tuple[str, ...],
+    baseline_wall_seconds: float,
+) -> tuple[bool, ...]:
+    """Return ordered kill verdicts, with infrastructure failures left explicit.
+
+    Singleton containers make outer harness timeouts attributable to exactly one
+    mutant. Repository source and tests are only interpreted inside that boundary.
+    """
+    if not mutants:
+        return ()
+    if not math.isfinite(baseline_wall_seconds) or baseline_wall_seconds < 0:
+        raise ValueError("baseline_wall_seconds must be finite and nonnegative")
+    timeout = max(1.0, 2.0 * baseline_wall_seconds)
+    if not math.isfinite(timeout):
+        raise ValueError("mutation timeout exceeds finite range")
+    if not failing_test_ids:
+        raise ValueError("mutation probing requires failing test ids")
+    for test_id in failing_test_ids:
+        if "\0" in test_id:
+            raise ValueError("invalid failing test id")
+        _validate_relative_path(test_id.split("::", 1)[0])
+    for mutant in mutants:
+        _validate_relative_path(mutant.file_path)
+    script = build_mutation_batch_script()
+    outcomes: list[bool] = []
+    for mutant in mutants:
+        payload = json.dumps(
+            {
+                "mutants": [
+                    {"file_path": mutant.file_path, "mutated_source": mutant.mutated_source}
+                ],
+                "failing_test_ids": failing_test_ids,
+                "timeout_seconds": timeout,
+            },
+            separators=(",", ":"),
+        )
+        try:
+            result = runner.run_in_container(
+                case_id, patch_diff_hash, workspace_host_path,
+                ["python", "-I", "-B", "-c", script, payload],
+            )
+        except HarnessTimeoutError:
+            outcomes.append(True)
+        else:
+            outcomes.append(_read_outcome(result, case_id, patch_diff_hash))
+    return tuple(outcomes)
