@@ -38,7 +38,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -59,7 +59,10 @@ from agentsentinel.domain.models import (
     CaseSpec,
     EvidenceBundle,
     ExecutionResult,
+    MinimizationSummary,
+    MutationAdequacySummary,
     PatchProposal,
+    SurvivedMutantDetail,
 )
 from agentsentinel.llm.exceptions import (
     LLMAuthenticationError,
@@ -95,6 +98,10 @@ from agentsentinel.sandbox.container import (
 )
 from agentsentinel.sandbox.workspace import WorkspaceManager
 from agentsentinel.verification.overfit_guard import verify_not_overfitted
+from agentsentinel.verification.post_pass_gate import (
+    run_ddmin_hunk_minimization,
+    run_mutation_adequacy_probe,
+)
 
 if TYPE_CHECKING:
     from agentsentinel.llm.client import LLMClient
@@ -245,6 +252,8 @@ class RepairStateMachine:
     max_mutants: int = field(default=3, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.max_mutants < 0:
+            raise ValueError("max_mutants must be nonnegative")
         if self.container_runner is None:
             self.container_runner = HardenedContainerRunner(self.container_config)
         if self.image_digest == "sha256:unspecified":
@@ -430,6 +439,20 @@ class RepairStateMachine:
                 u = _json.loads(attempt_row[0])
                 total_prompt += int(u.get("prompt_tokens", 0))
                 total_completion += int(u.get("completion_tokens", 0))
+        approval = rec.approval_record or {}
+        min_data = approval.get("minimization_summary")
+        mutation_data = approval.get("mutation_adequacy_summary")
+        minimization = MinimizationSummary(**min_data) if min_data is not None else None
+        mutation = None
+        if mutation_data is not None:
+            mutation = MutationAdequacySummary(
+                **{key: value for key, value in mutation_data.items()
+                   if key != "survived_mutant_details"},
+                survived_mutant_details=tuple(
+                    SurvivedMutantDetail(**detail)
+                    for detail in mutation_data["survived_mutant_details"]
+                ),
+            )
         bundle = EvidenceBundle(
             case_id=self.spec.case_id,
             spec=self.spec,
@@ -439,6 +462,8 @@ class RepairStateMachine:
             total_prompt_tokens=total_prompt,
             total_completion_tokens=total_completion,
             attempts=rec.attempts_used,
+            minimization_summary=minimization,
+            mutation_adequacy_summary=mutation,
         )
         return bundle
 
@@ -964,8 +989,27 @@ class RepairStateMachine:
             expected_test_ids=self.spec.failing_test_ids,
         )
 
-        shutil.rmtree(patched_ws, ignore_errors=True)
-        self._pending_patched_ws = None
+        original_patch, original_result = patch, result
+        minimization: MinimizationSummary | None = None
+        mutation: MutationAdequacySummary | None = None
+        try:
+            if result.passed and (self.enable_ddmin_minimization or self.enable_mutation_probe):
+                patch, result, minimization, mutation = self._run_post_pass_checks(
+                    patch, result, patched_ws,
+                )
+        except (HarnessSetupError, OSError, ValueError, SyntaxError, PatchPolicyError) as error:
+            self._store.record_attempt_outcome(
+                run_id, attempt_index, AttemptStatus.TEST_FAILED,
+                error_type="PostPassInfrastructure", error_detail=str(error),
+                execution_result_json=_result_to_dict(original_result),
+            )
+            self._store.set_termination(
+                run_id, RunState.TERMINATED_FAILED, TerminationReason.INFRASTRUCTURE_FAILURE,
+            )
+            raise InfrastructureFailureError(str(error)) from error
+        finally:
+            shutil.rmtree(patched_ws, ignore_errors=True)
+            self._pending_patched_ws = None
 
         if result.passed:
             # Success! Enter approval gate
@@ -976,37 +1020,32 @@ class RepairStateMachine:
                 image_digest,
                 post_patch_hash,
             )
-            approval_record = {
+            approval_record: dict[str, Any] = {
                 "diff_hash": patch.diff_hash,
                 "image_digest": image_digest,
                 "post_patch_result_hash": post_patch_hash,
                 "approval_hash": approval_hash,
             }
-            # Record the passing attempt
-            self._store.record_attempt_outcome(
-                run_id,
-                attempt_index,
-                AttemptStatus.PASSED_PENDING_APPROVAL,
+            if minimization is not None:
+                approval_record["minimization_summary"] = asdict(minimization)
+            if mutation is not None:
+                approval_record["mutation_adequacy_summary"] = asdict(mutation)
+            if minimization is not None or mutation is not None:
+                approval_record["original_proposal"] = _proposal_to_dict(original_patch)
+                approval_record["original_execution_result"] = _result_to_dict(original_result)
+            self._store.record_verified_patch(
+                run_id, attempt_index,
+                proposal_json=_proposal_to_dict(patch),
                 execution_result_json=_result_to_dict(result),
+                diff_hash=patch.diff_hash,
+                ast_hash=(getattr(self, "_selected_ast_hash", None)
+                          if minimization is not None or mutation is not None else None),
+                approval_record=approval_record,
             )
-            self._store.transition_state(run_id, RunState.AWAITING_HUMAN_APPROVAL)
-            # Stash approval binding for sign-off
-            rec = self._store.get_run(run_id)
-            assert rec is not None
-            # Reuse set_approval_record's json field but WITHOUT marking approved
-            now = __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
-            with self._store._conn:
-                self._store._conn.execute(
-                    "UPDATE runs SET approval_record_json = ?, updated_at_utc = ? WHERE run_id = ?",
-                    (
-                        __import__("json").dumps(approval_record),
-                        now,
-                        run_id,
-                    ),
-                )
+            self._pending_patch = patch
             self._pending_approval_binding = approval_record
             # Auto-approve hook (benchmark mode): bypass human review.
-            if self.auto_approve_on_fix:
+            if self.auto_approve_on_fix and not (mutation and mutation.low_mutation_adequacy):
                 self.approve_run(
                     run_id=run_id,
                     approver_id="benchmark-auto-approve",
@@ -1054,6 +1093,43 @@ class RepairStateMachine:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _run_post_pass_checks(
+        self, patch: PatchProposal, result: ExecutionResult, patched_ws: Path,
+    ) -> tuple[PatchProposal, ExecutionResult, MinimizationSummary | None,
+               MutationAdequacySummary | None]:
+        """Evaluate optional gates before approval; never execute source on the host."""
+        assert self.container_runner is not None
+        baseline = self._get_source_workspace()
+        minimization = None
+        mutation = None
+        selected = patch.unified_diff
+        if self.enable_ddmin_minimization:
+            selected, result, minimization = run_ddmin_hunk_minimization(
+                raw_diff=patch.unified_diff, baseline_workspace=baseline, spec=self.spec,
+                runner=self.container_runner, original_result=result,
+            )
+        with self._ws_mgr.create_workspace() as scratch:
+            selected_ws = patched_ws
+            if selected != patch.unified_diff:
+                patch = replace(patch, unified_diff=selected)
+                selected_ws = Path(scratch)
+                self._ws_mgr.populate_from_directory(baseline, selected_ws)
+                self._ws_mgr.scrub_git_history(selected_ws)
+                apply_validated_patch(
+                    patch=patch, source_workspace=baseline,
+                    allowed_edit_paths=self.spec.allowed_edit_paths, dest_workspace=selected_ws,
+                )
+            result = replace(result, patch_diff_hash=patch.diff_hash)
+            if self.enable_mutation_probe:
+                mutation = run_mutation_adequacy_probe(
+                    minimized_diff=selected, baseline_workspace=baseline,
+                    patched_workspace=selected_ws, spec=self.spec, runner=self.container_runner,
+                    max_mutants=self.max_mutants, post_patch_result=result,
+                )
+            fingerprint = tier2_fingerprint(selected_ws, self.spec.allowed_edit_paths)
+            self._selected_ast_hash = fingerprint.hex if fingerprint is not None else None
+        return patch, result, minimization, mutation
 
     def _load_latest_generated_patch(
         self, run_id: str

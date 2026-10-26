@@ -303,6 +303,37 @@ class CheckpointStore:
                 ),
             )
 
+    def record_verified_patch(
+        self,
+        run_id: str,
+        attempt_index: int,
+        *,
+        proposal_json: dict[str, Any],
+        execution_result_json: dict[str, Any],
+        diff_hash: str,
+        ast_hash: str | None,
+        approval_record: dict[str, Any],
+    ) -> None:
+        """Atomically bind the selected patch/result to pending approval."""
+        now = _now_iso()
+        with self._conn:
+            attempt = self._conn.execute(
+                "UPDATE attempts SET proposal_json = ?, execution_result_json = ?, "
+                "diff_hash = ?, ast_hash = ?, status = ?, error_type = NULL, "
+                "error_detail = NULL, timestamp_utc = ? WHERE run_id = ? AND attempt_index = ?",
+                (_dumps(proposal_json), _dumps(execution_result_json), diff_hash, ast_hash,
+                 AttemptStatus.PASSED_PENDING_APPROVAL.value, now, run_id, attempt_index),
+            )
+            if attempt.rowcount != 1:
+                raise KeyError(f"Attempt {run_id!r}/{attempt_index} not found")
+            run = self._conn.execute(
+                "UPDATE runs SET approval_record_json = ?, state = ?, updated_at_utc = ? "
+                "WHERE run_id = ?",
+                (_dumps(approval_record), RunState.AWAITING_HUMAN_APPROVAL.value, now, run_id),
+            )
+            if run.rowcount != 1:
+                raise KeyError(f"run_id {run_id!r} not found")
+
     # ------------------------------------------------------------------
     # Seen-hash bookkeeping (for dedup)
     # ------------------------------------------------------------------

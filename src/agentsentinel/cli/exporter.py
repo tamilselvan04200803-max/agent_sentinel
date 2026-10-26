@@ -8,6 +8,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from agentsentinel.domain.exceptions import UnapprovedExportError
+from agentsentinel.llm.prompts import sanitize_diagnostic
 from agentsentinel.orchestrator.checkpoint import (
     AttemptStatus,
     CheckpointStore,
@@ -116,6 +117,9 @@ def export_evidence_bundle(
             ),
             "unknown_cost_attempts": unknown_cost_attempts,
         }
+        for summary_key in ("minimization_summary", "mutation_adequacy_summary"):
+            if summary_key in approval:
+                evidence_bundle[summary_key] = approval[summary_key]
         evidence: dict[str, Any] = {
             "run_id": rec.run_id,
             "case_id": rec.case_id,
@@ -142,7 +146,7 @@ def export_evidence_bundle(
 
     # Write files only after the APPROVED gate has passed.
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    (bundle_dir / "evidence.json").write_text(evidence_json, encoding="utf-8")
+    (bundle_dir / "evidence.json").write_text(evidence_json, encoding="utf-8", newline="\n")
     (bundle_dir / "approved.patch").write_text(approved_diff, encoding="utf-8", newline="\n")
     (bundle_dir / "REPORT.md").write_text(
         _render_report_md(evidence),
@@ -172,6 +176,34 @@ def _render_report_md(ev: dict[str, Any]) -> str:
         lines.append(f"- Image digest: `{approval.get('image_digest')}`")
         lines.append(f"- Post-patch result hash: `{approval.get('post_patch_result_hash')}`")
         lines.append(f"- Approval signature: `{approval.get('approval_hash')}`")
+    minimization = approval.get("minimization_summary")
+    mutation = approval.get("mutation_adequacy_summary")
+    if minimization is not None:
+        lines.extend(["", "## Post-pass Minimization", ""])
+        lines.append(
+            f"- Hunks: {minimization['raw_hunks_count']} -> "
+            f"{minimization['minimized_hunks_count']} "
+            f"({minimization['codeslop_hunks_removed']} removed)."
+        )
+        lines.append("- Single-pass subset search; global minimality is not guaranteed.")
+    if mutation is not None:
+        lines.extend(["", "## Mutation Adequacy", ""])
+        lines.append(
+            f"- Evaluated: {mutation['total_mutants_evaluated']}; "
+            f"killed: {mutation['mutants_killed']}; survived: {mutation['mutants_survived']}; "
+            f"score: {mutation['mutation_score']:.3f}."
+        )
+        if mutation["low_mutation_adequacy"]:
+            lines.append("- **Low mutation adequacy: all evaluated mutants survived.**")
+        for detail in mutation["survived_mutant_details"]:
+            text = " | ".join(str(detail[key]) for key in (
+                "mutant_id", "file_path", "function_name", "mutation_description",
+            ))
+            safe_text = sanitize_diagnostic(text, max_chars=1000).replace("\n", " ")
+            lines.append(f"- Survivor: {safe_text}")
+        lines.append(
+            "- Equivalent mutants and weak test oracles limit interpretation of this score."
+        )
     attempts = ev.get("attempts") or []
     if attempts:
         lines.append("")

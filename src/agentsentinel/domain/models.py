@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -177,9 +177,8 @@ class MinimizationSummary:
     minimized_hunks_count:
         Number of hunks remaining after minimization.
     codeslop_hunks_removed:
-        Number of hunks removed because they consisted entirely of
-        non-functional "code slop" (e.g. inert imports, commented-out
-        blocks).
+        Number of omitted hunks in the selected passing subset. Passing
+        the configured tests does not prove those hunks were unused.
     was_minimized:
         ``True`` iff minimization was actually performed (i.e.
         ``raw_hunks_count > minimized_hunks_count``).
@@ -218,7 +217,7 @@ class MutationAdequacySummary:
     Attributes
     ----------
     low_mutation_adequacy:
-        ``True`` iff mutation score falls below the acceptable threshold.
+        ``True`` iff at least one mutant was evaluated and every mutant survived.
     total_mutants_evaluated:
         Total number of mutants generated and executed.
     mutants_killed:
@@ -400,16 +399,18 @@ class EvidenceBundle:
             raise ValueError(f"attempts must be ≥ 1, got {self.attempts}")
         if self.total_prompt_tokens < 0 or self.total_completion_tokens < 0:
             raise ValueError("token counts must be non-negative")
-        payload = json.dumps(
-            {
-                "case_id": self.case_id,
-                "baseline_exit_code": int(self.baseline_result.exit_code),
-                "final_exit_code": int(self.final_result.exit_code),
-                "patch_hash": self.accepted_patch.diff_hash if self.accepted_patch else None,
-                "attempts": self.attempts,
-            },
-            sort_keys=True,
-        )
+        hash_fields: dict[str, Any] = {
+            "case_id": self.case_id,
+            "baseline_exit_code": int(self.baseline_result.exit_code),
+            "final_exit_code": int(self.final_result.exit_code),
+            "patch_hash": self.accepted_patch.diff_hash if self.accepted_patch else None,
+            "attempts": self.attempts,
+        }
+        if self.minimization_summary is not None:
+            hash_fields["minimization_summary"] = asdict(self.minimization_summary)
+        if self.mutation_adequacy_summary is not None:
+            hash_fields["mutation_adequacy_summary"] = asdict(self.mutation_adequacy_summary)
+        payload = json.dumps(hash_fields, sort_keys=True)
         object.__setattr__(self, "bundle_hash", _sha256_of(payload))
 
     @property
@@ -419,7 +420,7 @@ class EvidenceBundle:
 
     def to_summary_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable summary suitable for the evidence report."""
-        return {
+        summary: dict[str, Any] = {
             "case_id": self.case_id,
             "repair_succeeded": self.repair_succeeded,
             "attempts": self.attempts,
@@ -431,3 +432,8 @@ class EvidenceBundle:
             "patch_hash": self.accepted_patch.diff_hash if self.accepted_patch else None,
             "bundle_hash": self.bundle_hash,
         }
+        if self.minimization_summary is not None:
+            summary["minimization_summary"] = asdict(self.minimization_summary)
+        if self.mutation_adequacy_summary is not None:
+            summary["mutation_adequacy_summary"] = asdict(self.mutation_adequacy_summary)
+        return summary
