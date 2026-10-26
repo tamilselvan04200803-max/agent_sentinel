@@ -422,9 +422,6 @@ def verify_not_overfitted(
     else:
         literals = test_literals
 
-    if not literals:
-        return
-
     for file_path, post_src in post_patch_sources.items():
         if not file_path.endswith(".py"):
             continue
@@ -444,6 +441,9 @@ def verify_not_overfitted(
             continue
 
         check_ast_bloat_and_debug_residue(file_path, pre_src, post_src)
+
+        if not literals:
+            continue
 
         pre_dumps = _collect_branch_test_dumps(pre_tree)
         pre_constants = _collect_all_folded_constants(pre_tree)

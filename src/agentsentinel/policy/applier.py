@@ -114,7 +114,7 @@ def _git_apply(patch_file: str, workspace: Path, check_only: bool) -> tuple[bool
 
 
 def _git_apply_with_fallback(
-    patch_file: str, workspace: Path, raw_diff: str
+    patch_file: str, workspace: Path, raw_diff: str, allowed_edit_paths: tuple[str, ...]
 ) -> tuple[bool, str]:
     """Verify patch applicability with ``git apply --check`` then apply it.
 
@@ -153,6 +153,9 @@ def _git_apply_with_fallback(
             # Attempt deterministic line-number healing
             heal_result = heal_diff_line_numbers(raw_diff, workspace)
             if heal_result.was_healed:
+                PatchPolicyValidator(allowed_edit_paths=allowed_edit_paths).validate_diff(
+                    heal_result.healed_diff, workspace_root=workspace
+                )
                 # Re-check with the healed diff
                 healed_patch_file = _write_patch_file(heal_result.healed_diff)
                 try:
@@ -267,7 +270,7 @@ def apply_validated_patch(
     # Step 4: Write patch to a temp file with strict newline="\n" and apply via git
     patch_file = _write_patch_file(patch.unified_diff)
     try:
-        _git_apply_with_fallback(patch_file, patched_ws, patch.unified_diff)
+        _git_apply_with_fallback(patch_file, patched_ws, patch.unified_diff, allowed_edit_paths)
     finally:
         with contextlib.suppress(OSError):
             Path(patch_file).unlink()

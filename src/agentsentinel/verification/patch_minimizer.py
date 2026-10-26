@@ -13,6 +13,8 @@ This module provides three facilities for the anti-overfitting verification pipe
 from __future__ import annotations
 
 import ast
+import re
+from collections import Counter
 
 from agentsentinel.domain.exceptions import OverfitPolicyError
 
@@ -55,27 +57,96 @@ def compute_cyclomatic_complexity(tree: ast.AST) -> int:
     return cc
 
 
-def _collect_debug_calls(tree: ast.AST) -> set[str]:
-    """Collect debug-call signatures from ``tree``.
+def _block_outcomes(body: list[ast.stmt]) -> set[str]:
+    """Bounded control-flow outcomes, without descending into nested scopes."""
+    outcomes = {"fallthrough"}
+    for statement in body:
+        if "fallthrough" not in outcomes:
+            break
+        current = {"fallthrough"}
+        if isinstance(statement, ast.Raise):
+            current = {"exit"}
+        elif isinstance(statement, ast.Return):
+            meaningful = statement.value is not None and not (
+                isinstance(statement.value, ast.Constant) and statement.value.value is None
+            )
+            current = {"exit" if meaningful else "swallow"}
+        elif isinstance(statement, ast.If):
+            current = _block_outcomes(statement.body) | _block_outcomes(statement.orelse)
+        outcomes = (outcomes - {"fallthrough"}) | current
+    return outcomes
 
-    Captures ``breakpoint()`` and ``<expr>.set_trace()`` where ``<expr>`` is the
-    bare name ``pdb`` or ``ipdb``.
-    """
-    debug_calls: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if isinstance(func, ast.Name) and func.id == "breakpoint":
-            debug_calls.add("breakpoint")
-        elif (
-            isinstance(func, ast.Attribute)
-            and func.attr == "set_trace"
-            and isinstance(func.value, ast.Name)
-            and func.value.id in {"pdb", "ipdb"}
-        ):
-            debug_calls.add(f"{func.value.id}.set_trace")
-    return debug_calls
+
+class _HazardCollector(ast.NodeVisitor):
+    """Count hazards by lexical scope and resolve direct import aliases."""
+
+    def __init__(self) -> None:
+        self.scope: tuple[str, ...] = ()
+        self.aliases: dict[str, str] = {}
+        self.debug: Counter[tuple[str, ...]] = Counter()
+        self.handlers: Counter[tuple[str, ...]] = Counter()
+        self.occurrences: Counter[tuple[str, ...]] = Counter()
+
+    def _qualified(self, node: ast.expr) -> str:
+        if isinstance(node, ast.Name):
+            return self.aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            return f"{self._qualified(node.value)}.{node.attr}"
+        return ""
+
+    def _visit_scope(self, node: ast.AST, name: str, body: list[ast.stmt]) -> None:
+        previous_scope, previous_aliases = self.scope, self.aliases
+        key = (*self.scope, name)
+        occurrence = self.occurrences[key]
+        self.occurrences[key] += 1
+        self.scope = (*key, str(occurrence))
+        self.aliases = previous_aliases.copy()
+        # Bind imports in this scope only; child functions have their own aliases.
+        pending: list[ast.AST] = list(body)
+        while pending:
+            child = pending.pop()
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    self.aliases[alias.asname or alias.name] = alias.name
+            elif isinstance(child, ast.ImportFrom):
+                for alias in child.names:
+                    self.aliases[alias.asname or alias.name] = f"{child.module}.{alias.name}"
+            elif not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                pending.extend(ast.iter_child_nodes(child))
+        self.generic_visit(node)
+        self.scope, self.aliases = previous_scope, previous_aliases
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._visit_scope(node, "<module>", node.body)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_scope(node, node.name, node.body)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_scope(node, node.name, node.body)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._visit_scope(node, node.name, node.body)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = self._qualified(node.func)
+        if name in {
+            "breakpoint", "builtins.breakpoint", "pdb.set_trace", "ipdb.set_trace",
+        }:
+            self.debug[(*self.scope, name.removeprefix("builtins."))] += 1
+        self.generic_visit(node)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        types = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+        broad = any(
+            item is not None and self._qualified(item) in {
+                "Exception", "BaseException", "builtins.Exception", "builtins.BaseException",
+            }
+            for item in types
+        )
+        if node.type is None or (broad and _block_outcomes(node.body) != {"exit"}):
+            self.handlers[(*self.scope, ast.dump(node, include_attributes=False))] += 1
+        self.generic_visit(node)
 
 
 def check_ast_bloat_and_debug_residue(
@@ -99,14 +170,21 @@ def check_ast_bloat_and_debug_residue(
     except SyntaxError:
         return
 
-    pre_debug = _collect_debug_calls(pre_tree)
-    post_debug = _collect_debug_calls(post_tree)
-    leaked = post_debug - pre_debug
+    pre_hazards, post_hazards = _HazardCollector(), _HazardCollector()
+    pre_hazards.visit(pre_tree)
+    post_hazards.visit(post_tree)
+    leaked = post_hazards.debug - pre_hazards.debug
     if leaked:
         raise OverfitPolicyError(
             leaked_literal="breakpoint/set_trace",
             file_path=file_path,
             message="Debug residue (breakpoint/set_trace) forbidden in repair patch",
+        )
+
+    if post_hazards.handlers - pre_hazards.handlers:
+        raise OverfitPolicyError(
+            file_path=file_path,
+            message="New bare or swallowing exception handler forbidden in repair patch",
         )
 
     cc_delta = compute_cyclomatic_complexity(post_tree) - compute_cyclomatic_complexity(pre_tree)
@@ -131,17 +209,30 @@ def _split_diff_sections(raw_diff: str) -> list[list[str]]:
     """
     sections: list[list[str]] = []
     current: list[str] = []
+    remaining_old = remaining_new = 0
 
-    for line in raw_diff.split("\n"):
+    for line in raw_diff.splitlines():
         is_diff_git = line.startswith("diff --git ")
         is_triple_dash = line.startswith("--- ")
-        # ``---`` begins a new section only when there is no preceding
-        # ``diff --git`` in the current section (i.e., the section has not
-        # already been opened by a ``diff --git`` marker).
+        header = _HUNK_HEADER_RE.match(line)
+        in_hunk = remaining_old > 0 or remaining_new > 0
         has_diff_git_prefix = bool(current) and current[0].startswith("diff --git ")
-        if (is_diff_git or (is_triple_dash and not has_diff_git_prefix)) and current:
+        # Counts disambiguate removed source lines beginning with "--- ".
+        starts_plain_file = is_triple_dash and not in_hunk and not has_diff_git_prefix
+        # A second plain file follows a completed hunk, even after a git prefix.
+        starts_plain_file |= is_triple_dash and not in_hunk and any(
+            part.startswith("@@ ") for part in current
+        )
+        if (is_diff_git or starts_plain_file) and current:
             sections.append(current)
             current = []
+            remaining_old = remaining_new = 0
+        if header:
+            remaining_old = int(header.group(2) or "1")
+            remaining_new = int(header.group(4) or "1")
+        elif in_hunk:
+            remaining_old -= int(not line or line[0] in (" ", "-"))
+            remaining_new -= int(not line or line[0] in (" ", "+"))
         current.append(line)
     if current:
         sections.append(current)
@@ -177,25 +268,26 @@ def _split_hunks(section_lines: list[str]) -> tuple[list[str], list[list[str]]]:
     return header_lines, hunks
 
 
-def _build_diff(
-    header_lines: list[str],
-    kept_hunks: list[list[str]],
-) -> str:
-    """Assemble a single-file diff from its header and a subset of hunks."""
-    lines: list[str] = []
-    for header_line in header_lines:
-        if not header_line.endswith("\n"):
-            header_line += "\n"
-        lines.append(header_line)
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+
+
+def _build_diff(header_lines: list[str], kept_hunks: list[list[str]]) -> str:
+    """Render selected hunks with offsets relative to their own prior edits."""
+    lines = header_lines.copy()
+    delta = 0
     for hunk in kept_hunks:
-        for hunk_line in hunk:
-            if not hunk_line.endswith("\n"):
-                hunk_line += "\n"
-            lines.append(hunk_line)
-    body = "".join(lines)
-    if not body.endswith("\n"):
-        body += "\n"
-    return body
+        match = _HUNK_HEADER_RE.fullmatch(hunk[0])
+        if match is None:
+            raise ValueError("Invalid unified diff hunk header")
+        body = [line if line else " " for line in hunk[1:]]
+        old_count = sum(line[0] in (" ", "-") for line in body)
+        new_count = sum(line[0] in (" ", "+") for line in body)
+        old_start = int(match.group(1))
+        new_start = old_start + delta + (old_count == 0) - (new_count == 0)
+        lines.append(f"@@ -{old_start},{old_count} +{new_start},{new_count} @@{match.group(5)}")
+        lines.extend(body)
+        delta += new_count - old_count
+    return "\n".join(lines) + "\n"
 
 
 def generate_minimal_hunk_subsets(raw_diff: str) -> list[str]:
@@ -279,4 +371,4 @@ def generate_minimal_hunk_subsets(raw_diff: str) -> list[str]:
             if diff is not None:
                 candidates.append(diff)
 
-    return candidates
+    return list(dict.fromkeys(candidates))

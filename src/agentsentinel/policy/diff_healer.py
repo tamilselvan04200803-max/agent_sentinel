@@ -19,7 +19,6 @@ deterministic, safety-invariant line-number correction:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -49,29 +48,6 @@ class HealResult:
     relocated_hunks_count: int
 
 
-_HUNK_HEADER_RE = re.compile(
-    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$"
-)
-
-
-def _extract_preimage_lines(lines: list[str]) -> list[str]:
-    """Extract pre-image (context + removed) lines from a hunk body.
-
-    Returns the exact sequence of source-file lines (without the leading
-    ``' '`` or ``'-'`` characters) that the hunk's ``@@`` header refers to.
-    Addition lines (``'+'``) and no-newline markers (``'\\'``) are excluded.
-    """
-    result: list[str] = []
-    for line in lines:
-        if not line:
-            result.append("")
-            continue
-        origin = line[0]
-        if origin in (" ", "-"):
-            result.append(line[1:])
-    return result
-
-
 def _count_matches(target_lines: list[str], needle: list[str]) -> list[int]:
     """Find all 0-indexed start positions where *needle* occurs in *target_lines*.
 
@@ -96,150 +72,43 @@ def _count_matches(target_lines: list[str], needle: list[str]) -> list[int]:
 
 
 def heal_diff_line_numbers(raw_diff: str, workspace_root: Path) -> HealResult:
-    """Deterministically heal ``@@`` line-number drift in a unified diff.
+    """Correct coordinates only for unique exact preimages; preserve hunk bodies.
 
-    Parameters
-    ----------
-    raw_diff:
-        Raw unified diff text (may contain CRLF).
-    workspace_root:
-        Root directory of the workspace containing the target files.
-
-    Returns
-    -------
-    HealResult
-        Healing result with the (possibly corrected) diff and metadata.
-
-    Safety invariants
-    -----------------
-    - A hunk whose pre-image already matches at the declared ``old_start``
-      is left untouched (no false relocations).
-    - A hunk with **zero** matches is left untouched (corrupt context —
-      let ``git apply`` report the error).
-    - A hunk with **two or more** matches is left untouched (ambiguous —
-      do not guess, let ``git apply`` fail deterministically).
-    - Only hunks with exactly **one** match at a **different** line number
-      are rewritten.
+    Header positions are consumed in parsed file/hunk order, so identical
+    coordinates in different files cannot select the wrong header. Empty
+    preimages never establish a unique relocation.
     """
-    # Normalize line endings
     normalized = raw_diff.replace("\r\n", "\n").replace("\r", "\n")
-
-    # Parse the diff to get file paths and hunks
     parsed = UnifiedDiffParser.parse(normalized)
-
-    # We need to rebuild the diff line-by-line with corrected headers
-    diff_lines = normalized.splitlines(keepends=False)
-
+    diff_lines = normalized.splitlines()
+    header_positions = iter(i for i, line in enumerate(diff_lines) if line.startswith("@@ "))
     relocated_count = 0
-
-    # Iterate over each file patch
+    root = workspace_root.resolve()
     for file_patch in parsed.files:
-        # Determine the target file path
-        target_path_str = file_patch.target_path
-        if not target_path_str or target_path_str == "/dev/null":
+        positions = [next(header_positions) for _ in file_patch.hunks]
+        target_file = (root / file_patch.target_path).resolve()
+        if not target_file.is_relative_to(root) or not target_file.is_file():
             continue
-
-        # Resolve the target file
-        target_file = (workspace_root / target_path_str).resolve()
-
-        # Only process existing regular files
-        if not target_file.is_file():
-            continue
-
-        # Ensure the target file is within the workspace (safety)
-        try:
-            target_file.relative_to(workspace_root.resolve())
-        except ValueError:
-            continue
-
-        # Read the target file lines
-        target_content = target_file.read_text(encoding="utf-8")
-        target_lines = target_content.splitlines(keepends=False)
-
-        # Process each hunk — track cumulative delta across hunks for this file
+        target_lines = target_file.read_text(encoding="utf-8").splitlines()
         cumulative_delta = 0
-
-        for hunk in file_patch.hunks:
-            # Reconstruct the hunk body lines with origin chars
-            hunk_body_lines: list[str] = [
-                f"{hl.origin}{hl.content}" for hl in hunk.lines
-            ]
-
-            # Extract pre-image lines from this hunk
-            preimage = _extract_preimage_lines(hunk_body_lines)
-
-            # Find all matches in the target file
+        for hunk, header_index in zip(file_patch.hunks, positions, strict=True):
+            preimage = [line.content for line in hunk.lines if line.origin in (" ", "-")]
+            new_count = sum(line.origin in (" ", "+") for line in hunk.lines)
             matches = _count_matches(target_lines, preimage)
-
-            # Safety invariant: only heal if exactly ONE match at a DIFFERENT line
-            if len(matches) != 1:
-                continue
-
-            true_old_start = matches[0] + 1  # 1-indexed line in target file
-            declared_old_start = hunk.old_start  # 1-indexed from @@ header
-
-            # If the match is at the already-declared position, no healing needed
-            if true_old_start == declared_old_start:
-                continue
-
-            # This hunk needs healing: rewrite its @@ header
-            relocated_count += 1
-
-            # Compute true new_start using cumulative_delta across hunks
-            true_new_start = true_old_start + cumulative_delta
-
-            # Compute true counts from the actual hunk content
-            true_old_count = len(preimage)
-            # Postimage lines: context (' ') + additions ('+')
-            postimage = [
-                line[1:] for line in hunk_body_lines
-                if line and line[0] in (" ", "+")
-            ]
-            true_new_count = len(postimage)
-
-            # Build the new header using true coordinates
-            heading = hunk.heading if hunk.heading else ""
-            new_header = (
-                f"@@ -{true_old_start},{true_old_count}"
-                f" +{true_new_start},{true_new_count} @@{heading}"
-            )
-
-            # Find and replace the hunk header in diff_lines
-            # We need to find the exact line in diff_lines that matches this hunk header
-            # The header line format is: @@ -old_start,old_count +new_start,new_count @@ heading
-            found_and_replaced = False
-            for idx, dl in enumerate(diff_lines):
-                if dl.startswith("@@ "):
-                    match = _HUNK_HEADER_RE.match(dl)
-                    if match:
-                        dl_old_start = int(match.group(1))
-                        dl_new_start = int(match.group(3))
-
-                        # Check if this is the hunk we're looking for
-                        if (
-                            dl_old_start == declared_old_start
-                            and dl_new_start == hunk.new_start
-                        ):
-                            diff_lines[idx] = new_header
-                            found_and_replaced = True
-                            break
-
-            if not found_and_replaced:
-                # Should not happen if parsing is correct, but skip safely
-                continue
-
-            # Update cumulative delta for subsequent hunks
-            cumulative_delta += true_new_count - true_old_count
-
-    # Reconstruct the healed diff
-    healed_diff = "\n".join(diff_lines)
-    if healed_diff and not healed_diff.endswith("\n"):
-        healed_diff += "\n"
-
-    was_healed = relocated_count > 0
-
-    return HealResult(
-        healed_diff=healed_diff,
-        was_healed=was_healed,
-        relocated_hunks_count=relocated_count,
-    )
+            if len(matches) == 1:
+                old_start = matches[0] + 1
+                # A zero-length postimage uses the line preceding the deletion.
+                new_start = old_start + cumulative_delta - (new_count == 0)
+                if (old_start, new_start) != (hunk.old_start, hunk.new_start):
+                    suffix = diff_lines[header_index].split("@@", 2)[2]
+                    diff_lines[header_index] = (
+                        f"@@ -{old_start},{len(preimage)} +{new_start},{new_count} @@{suffix}"
+                    )
+                    relocated_count += 1
+            # Every preceding hunk contributes, including unchanged headers.
+            cumulative_delta += new_count - len(preimage)
+    healed = "\n".join(diff_lines)
+    if healed and not healed.endswith("\n"):
+        healed += "\n"
+    UnifiedDiffParser.parse(healed)
+    return HealResult(healed, relocated_count > 0, relocated_count)
