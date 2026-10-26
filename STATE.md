@@ -1,10 +1,10 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M12 complete; final independent review findings resolved.
-- **Previous Milestones:** M0-M11 complete, with live Docker milestone gates passing.
-- **Release Base:** `fdfa7cf`; the existing unpushed commit is preserved.
+- **Current Active Milestone:** M13A complete; final implementation review findings resolved.
+- **Previous Milestones:** M0-M12 complete, with live Docker milestone gates passing.
+- **Release Base:** `56d78e4`; existing history, including `fdfa7cf`, is preserved.
 
-## Executive architecture (M0-M12)
+## Executive architecture (M0-M13A)
 
 | Milestone | Capability | Status |
 |---|---|---|
@@ -22,8 +22,42 @@
 | M10 | Additive, bounded changed-function mutation generator | Verified |
 | M11 | Declared public call-contract preservation | Verified |
 | M12 | Typed diagnostics and sanitized per-run retry feedback | Verified |
+| M13A | Post-pass subset search, mutation adequacy and approval-bound evidence | Verified |
 
-## Current verification evidence (2026-10-26)
+## M13A architecture and verification (2026-10-26)
+
+- Opt-in keyword-only state-machine flags default to disabled; `max_mutants=3`
+  is a total patch budget, with negative values rejected before setup.
+- Minimize before probing. Every candidate gets a fresh baseline copy and the
+  full policy, apply and overfit checks. Expected pytest IDs must visibly pass.
+  The single-pass singleton/drop-one search does not guarantee global or 1-minimality.
+- Differential mutants are generated only from the selected patch's changed
+  Python files. Every mutant runs in a separate hardened container and a writable
+  `/tmp/mut_workspace` shadow; `/workspace:ro` and read-only rootfs remain unchanged.
+- Child pytest uses fast-fail and a timeout of twice the accepted passing wall
+  time, with a one-second floor. Process groups and adopted children are reaped.
+  Test nonzero exits/timeouts count as kills; wrapper errors remain infrastructure errors.
+- Zero mutants score 1.0 without warning. All surviving mutants set a soft warning
+  and force human approval even in benchmark auto-approve mode.
+- Accepted proposal/result, hashes, summaries and awaiting-approval state are
+  checkpointed atomically without changing the SQLite schema. Original proposal
+  and result are retained. Programmatic/CLI exports retain summaries after reopen.
+- Canonical summary dataclasses live in `domain.models` and are reexported by
+  `verification.post_pass_gate`; this prevents duplicate types and circular imports.
+- Probe accepts optional `post_patch_result` to reuse actual passing evidence and
+  timing. Standalone calls without it measure once only when eligible mutants exist.
+- Initial integrated M13A verification: **102 passed**, including two live Docker
+  tests. Pre-review full suite: **668 passed, 1 skipped**, all nine live tests passed.
+- One final independent implementation review found two issues: whitespace in
+  parameterized test IDs and Windows command limits for full-module mutant payloads.
+  Both were reproduced failing, fixed, and verified: **88 focused tests** and all
+  **three M13A live Docker tests** passed. Large payloads use a disposable mounted
+  JSON control file that is excluded from the child shadow; small payloads retain
+  bounded direct arguments. Original source and read-only mounts remain intact.
+- Ruff is clean; strict mypy checks **41 source files** without errors.
+- Final verbose suite after both review fixes: **673 passed, 1 skipped, 0 failures** in **195.77 seconds**. All **10 live Docker tests passed** (7 existing + 3 M13A). The skip remains the unprivileged Windows symlink test. Code revision: `1430f09`; release publication target: `origin/main` via a normal push. No minor findings are deferred.
+
+## Historical M9-M12 verification evidence (2026-10-26)
 
 - M9: **445 passed, 1 skipped**, including all 7 live Docker tests.
 - M10: **472 passed, 1 skipped**, including all 7 live Docker tests.
@@ -40,7 +74,7 @@
   pytest uses a dedicated workspace temp directory and disables pytest's cache
   to avoid Windows ACL conflicts with sandbox-created temporary/cache directories.
 
-## Independent review closure
+## M9-M12 independent review closure
 
 - Public API extraction now follows effective statement-order bindings, including
   assignment/import/deletion and property replacement. Getter updates retain setters.
@@ -60,6 +94,8 @@
 - M10 is generation-only, with a separate additive API in `differential_mutation.py`;
   the legacy mutation API is unchanged. Generated mutants are not an adequacy proof.
 - M9 hunk candidates do not implement an oracle-driven ddmin minimization loop.
+- M13A evaluates those candidates in a bounded single pass. Removed hunks are not
+  proven dead code, and mutation scores do not establish correctness or test adequacy.
 - M11 is a bounded static call-signature check, not a semantic or dynamic API proof.
 - M12 retries consume feedback scoped to the run; transport handling and attempt
   accounting are preserved. Feedback remains process-local; SQLite schemas are unchanged.

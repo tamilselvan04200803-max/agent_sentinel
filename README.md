@@ -28,6 +28,7 @@ CaseSpec
   -> M11 public call-signature preservation
   -> sandbox verification (fresh workspace per attempt, pinned image digest)
   -> M12 categorized, sanitized retry feedback on failure
+  -> optional M13A passing-subset search, then mutation adequacy probing
   -> AWAITING_HUMAN_APPROVAL on passing verification
   -> approve / reject using sha256(diff_hash + image_digest + post_patch_hash)
   -> deterministic evidence bundle export (APPROVED runs only)
@@ -51,6 +52,7 @@ CaseSpec
 | M10 | Bounded differential AST mutant generation; legacy API retained | Complete |
 | M11 | Public symbol, signature and descriptor preservation | Complete |
 | M12 | Typed failure taxonomy and sanitized per-run retry feedback | Complete |
+| M13A | Live post-pass subset minimization and mutation adequacy evidence | Complete |
 
 ### M9-M12 interfaces and limits
 
@@ -69,8 +71,8 @@ It operates on changed or newly added function bodies, treats nested scopes
 separately, and validates generated syntax without executing it. Zero budget
 returns no mutants, negative budgets raise `ValueError`, and invalid source
 raises `SyntaxError`. The older whole-source `generate_patch_mutants` API and
-`PatchMutant` record remain available. Mutants are not automatically executed
-and their generation does not establish test adequacy.
+`PatchMutant` record remain available. Generation alone does not establish test
+adequacy; M13A optionally evaluates these mutants in the sandbox.
 
 `verify_public_api_compatibility(file_path, pre_source, post_source)` preserves
 explicit public functions/classes, directly declared public methods and
@@ -92,6 +94,40 @@ Approval records retain the existing unkeyed SHA-256 binding of the diff,
 image digest and execution-result hash. This is **not keyed HMAC authentication**
 and does not establish signer identity against an actor able to rewrite the
 stored record. Key management and approval-record migration are deferred.
+
+### M13A post-pass verification
+
+Construct `RepairStateMachine(..., enable_ddmin_minimization=True,
+enable_mutation_probe=True, max_mutants=3)` to enable the optional stages.
+Both flags default to `False`; the existing CLI does not enable them.
+The keyword-only `max_mutants` bounds the total across all changed Python files.
+
+Minimization tests existing singleton and drop-one candidates in order, using
+fresh baseline workspaces and full policy/overfit guards. The first passing
+candidate is selected, with every expected test ID required to pass. This is a
+single-pass search and does not establish global minimum or ddmin 1-minimality.
+`codeslop_hunks_removed` counts removed hunks; it does not prove they were dead code.
+
+Mutation probing uses only the selected patch and a fresh container per mutant.
+The read-only `/workspace` is copied into `/tmp/mut_workspace`; pytest runs with
+`-x --tb=no -q` and a child timeout of `max(1.0, 2 * accepted_result.wall_seconds)`.
+Child processes are reaped and the shadow tree is removed between mutants.
+Shadow copying remains subject to the runner's existing `/tmp` quota.
+Test nonzero exits and timeouts count as kills. Wrapper setup errors remain
+infrastructure failures. Zero mutants yield score `1.0` and no warning.
+
+When every evaluated mutant survives, `low_mutation_adequacy=True` requires human
+approval, including benchmark runs configured for auto-approval. This warning
+does not reject the passing repair. Equivalent mutants and weak test oracles
+limit the meaning of the score.
+
+The selected proposal/result and summaries are checkpointed atomically before
+approval binding. Original proposal/result records are retained for audit.
+`EvidenceBundle`, exported `evidence.json`, and `REPORT.md` include the optional
+`MinimizationSummary` and `MutationAdequacySummary`, including survivor details.
+Runs created before M13A retain their export behavior and database schema.
+Large mutant payloads travel through a disposable JSON control file to stay
+within Windows command limits. Control files are excluded from the test shadow.
 
 ## Safety and correctness invariants
 
@@ -265,8 +301,8 @@ LLM calls, tokens, and latency.
 ```
 
 Verified on 2026-10-26 with Python 3.13.7 and live Docker Desktop:
-**566 passed, 1 skipped**, all seven live Docker tests passed, Ruff clean,
-and strict mypy clean across 39 source files. The skip is the expected
+**673 passed, 1 skipped** in **195.77 seconds**, all ten live Docker tests passed,
+Ruff clean, and strict mypy clean across 41 source files. The skip is the expected
 unprivileged Windows symlink test. The release run disabled pytest's cache and
 used a dedicated `--basetemp` directory to avoid Windows permission conflicts.
 The final independent review findings were reproduced and fixed before this run.

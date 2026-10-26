@@ -1,4 +1,4 @@
-﻿# AgentSentinel M13A Implementation Plan
+# AgentSentinel M13A Implementation Plan
 
 > **For agentic workers:** Use OpenCode subagents for isolated workstreams. The coordinator owns shared integration, release gates, final review, commit, and push. Follow the task order and interface contracts below; do not edit the same files from parallel agents.
 
@@ -29,6 +29,13 @@
 5. Existing project instruction says ask before changes touching more than three files. The user supplied this concrete M13A execution directive and asked OpenCode to execute it; treat that as authorization for the planned multi-file work. Do not ask again unless the actual diff materially expands this scope.
 
 ## Shared Interfaces (freeze before parallel implementation)
+
+Execution decisions: canonical summary classes are defined in `domain.models`
+and reexported here to avoid duplicate identities/circular imports. The mutation
+probe also accepts optional `post_patch_result: ExecutionResult | None = None`;
+the state machine supplies the accepted result for timing, while standalone calls
+can measure passing evidence once. Mutation payload transport switches to a
+disposable mounted JSON file when direct arguments approach Windows limits.
 
 Create `src/agentsentinel/verification/post_pass_gate.py` with frozen dataclasses exactly as specified in the M13A directive:
 
@@ -139,3 +146,15 @@ Implement `run_ddmin_hunk_minimization(*, raw_diff: str, baseline_workspace: Pat
 - Wrapper infrastructure errors cannot inflate kill counts; timed-out descendants cannot affect later mutants.
 - Docker read-only mounts and read-only root filesystem remain enabled.
 - Ruff, strict mypy, full pytest, and live Docker outcomes are reported from actual command results.
+
+## Execution Record (2026-10-26)
+
+Implementation and verification completed through code revision `1430f09`.
+The canonical summary location, optional timing evidence, bounded single-pass
+search, and large-payload transport rulings are documented above and in STATE.md.
+Two independent implementation workers used separate worktrees; one final
+read-only reviewer assessed the integrated implementation. Both actionable
+findings were reproduced failing and fixed. No minor findings remain deferred.
+Final verification: **673 passed, 1 skipped**, all **10 live Docker tests passed**,
+Ruff clean, strict mypy clean across **41 source files**, and diff checks clean.
+The original task checklist is retained as the implementation handoff specification.
