@@ -22,8 +22,8 @@ Output format:
 
 from __future__ import annotations
 
-import re
 import textwrap
+import unicodedata
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -76,15 +76,18 @@ def _sanitize_content(content: str) -> str:
     str
         Sanitized content safe for embedding in a prompt.
     """
-    sanitized = content.replace("```", "'''")
-    # Strip Unicode BiDi and zero-width characters
-    return re.sub(r"[\u200b-\u200d\ufeff\u202a-\u202e\u2066-\u2069]", "", sanitized)
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    sanitized = "".join(
+        char for char in normalized
+        if char in "\n\t" or unicodedata.category(char) not in {"Cc", "Cf"}
+    )
+    # Neutralize fences last: stripping controls can join separated backticks.
+    return sanitized.replace("```", "'''")
 
 
 def sanitize_diagnostic(content: str, max_chars: int = 2000) -> str:
     """Bound a diagnostic field and strip fencing, Unicode and control poisoning."""
-    bounded = content[:max_chars].replace("\r\n", "\n").replace("\r", "\n")
-    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", _sanitize_content(bounded))
+    return _sanitize_content(content[:max_chars])
 
 
 def _read_file_safe(path: Path, max_chars: int = _MAX_FILE_CHARS) -> tuple[str, bool]:

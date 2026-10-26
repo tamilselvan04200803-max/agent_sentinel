@@ -58,23 +58,65 @@ def compute_cyclomatic_complexity(tree: ast.AST) -> int:
 
 
 def _block_outcomes(body: list[ast.stmt]) -> set[str]:
-    """Bounded control-flow outcomes, without descending into nested scopes."""
+    """Conservative exits without attributing nested function exits to a handler."""
     outcomes = {"fallthrough"}
     for statement in body:
         if "fallthrough" not in outcomes:
             break
-        current = {"fallthrough"}
-        if isinstance(statement, ast.Raise):
-            current = {"exit"}
-        elif isinstance(statement, ast.Return):
-            meaningful = statement.value is not None and not (
-                isinstance(statement.value, ast.Constant) and statement.value.value is None
-            )
-            current = {"exit" if meaningful else "swallow"}
-        elif isinstance(statement, ast.If):
-            current = _block_outcomes(statement.body) | _block_outcomes(statement.orelse)
-        outcomes = (outcomes - {"fallthrough"}) | current
+        outcomes = (outcomes - {"fallthrough"}) | _statement_outcomes(statement)
     return outcomes
+
+
+def _statement_outcomes(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, ast.Raise):
+        return {"raise"}
+    if isinstance(statement, ast.Return):
+        meaningful = statement.value is not None and not (
+            isinstance(statement.value, ast.Constant) and statement.value.value is None
+        )
+        return {"return" if meaningful else "swallow"}
+    if isinstance(statement, ast.If):
+        return _block_outcomes(statement.body) | _block_outcomes(statement.orelse)
+    if isinstance(statement, (ast.Break, ast.Continue)):
+        return {"loop_control"}
+    if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+        body = _block_outcomes(statement.body)
+        outcomes = (body - {"fallthrough", "loop_control"}) | _block_outcomes(statement.orelse)
+        # A break skips else; conservatively allow fallthrough for loop controls.
+        if "loop_control" in body:
+            outcomes.add("fallthrough")
+        return outcomes
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        outcomes = _block_outcomes(statement.body)
+        # A context manager can suppress an exception, but not a return.
+        if "raise" in outcomes:
+            outcomes.add("fallthrough")
+        return outcomes
+    if isinstance(statement, (ast.Try, ast.TryStar)):
+        outcomes = _block_outcomes(statement.body)
+        if "fallthrough" in outcomes:
+            outcomes = (outcomes - {"fallthrough"}) | _block_outcomes(statement.orelse)
+        for handler in statement.handlers:
+            outcomes |= _block_outcomes(handler.body)
+        final = _block_outcomes(statement.finalbody)
+        if "fallthrough" not in final:
+            return final
+        return outcomes | (final - {"fallthrough"})
+    if isinstance(statement, ast.Match):
+        outcomes = set().union(*(_block_outcomes(case.body) for case in statement.cases))
+        exhaustive = any(
+            isinstance(case.pattern, ast.MatchAs)
+            and case.pattern.pattern is None and case.guard is None
+            for case in statement.cases
+        )
+        if not exhaustive:
+            outcomes.add("fallthrough")
+        return outcomes
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {"fallthrough"}
+    if any(isinstance(child, ast.stmt) for child in ast.iter_child_nodes(statement)):
+        return {"unknown"}
+    return {"fallthrough"}
 
 
 class _HazardCollector(ast.NodeVisitor):
@@ -144,7 +186,7 @@ class _HazardCollector(ast.NodeVisitor):
             }
             for item in types
         )
-        if node.type is None or (broad and _block_outcomes(node.body) != {"exit"}):
+        if node.type is None or (broad and not _block_outcomes(node.body) <= {"return", "raise"}):
             self.handlers[(*self.scope, ast.dump(node, include_attributes=False))] += 1
         self.generic_visit(node)
 

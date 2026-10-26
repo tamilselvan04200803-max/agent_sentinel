@@ -112,3 +112,33 @@ def test_descriptor_import_alias_cannot_change_method_binding() -> None:
     post = "from builtins import staticmethod as static\nclass A:\n    @static\n    def f(self, x): return x\n"
     with pytest.raises(OverfitPolicyError, match="API contract"):
         verify(pre, post)
+
+
+@pytest.mark.parametrize(
+    ("pre", "post"),
+    [
+        ("def f(x): return x", "def f(x): return x\nf = None"),
+        ("class A: ...", "class A: ...\nA = None"),
+        ("class A: ...", "class A: ...\ndef A(): return None"),
+        ("def f(x): return x", "def f(x): return x\nclass f: ..."),
+        ("class A:\n    def f(self, x): return x", "class A:\n    def f(self, x): return x\n    f = None"),
+        ("def f(x): return x", "def f(x): return x\ndel f"),
+        ("def f(x): return x", "def f(x): return x\nfrom other import f"),
+        (
+            "class A:\n    @property\n    def value(self): return 1\n    @value.setter\n    def value(self, x): ...",
+            "class A:\n    @property\n    def value(self): return 1\n    @value.setter\n    def value(self, x): ...\n    @property\n    def value(self): return 2",
+        ),
+    ],
+)
+def test_effective_public_bindings_cannot_be_removed(pre: str, post: str) -> None:
+    with pytest.raises(OverfitPolicyError, match="API contract"):
+        verify(pre, post)
+
+
+def test_annotation_without_value_does_not_rebind_function() -> None:
+    verify("def f(x): return x", "def f(x): return x\nf: object")
+
+
+def test_property_getter_update_retains_existing_setter() -> None:
+    pre = "class A:\n    @property\n    def value(self): return 1\n    @value.setter\n    def value(self, x): ...\n"
+    verify(pre, pre + "    @value.getter\n    def value(self): return 2\n")

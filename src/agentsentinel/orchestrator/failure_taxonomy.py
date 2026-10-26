@@ -90,6 +90,8 @@ def classify_attempt_failure(
         )
     elif isinstance(error, (PatchPolicyError, PathTraversalError, SymlinkEscapeError)):
         category = FailureCategory.POLICY_PATH_OR_TEST_TAMPERING
+    elif isinstance(error, AssertionError):
+        category = FailureCategory.TEST_ASSERTION_VALUE_MISMATCH
     elif error is None:
         if execution_result is None or execution_result.passed:
             raise ValueError("Classification requires a failed execution or an exception")

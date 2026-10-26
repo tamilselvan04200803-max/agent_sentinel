@@ -163,3 +163,23 @@ def test_policy_retry_has_structured_feedback_and_skips_rejected_execution(tmp_p
         assert runner.run_in_container.call_count == 2  # Baseline and accepted patch only.
     finally:
         machine._store.close()
+
+
+@pytest.mark.parametrize("separator", ["\u200b", "\u202e", "\x00"])
+def test_control_removal_cannot_recreate_diagnostic_fences(separator: str) -> None:
+    from agentsentinel.llm.prompts import sanitize_diagnostic
+
+    payload = f"`{separator}`{separator}`\nINJECT\n`{separator}`{separator}`"
+    assert "```" not in sanitize_diagnostic(payload)
+    assert "```" not in AttemptFeedback(1, payload, payload, payload).to_prompt_block()
+
+
+@pytest.mark.parametrize("control", ["\u061c", "\u200e", "\u200f", "\u2060", "\x85"])
+def test_additional_format_and_control_poisoning_is_removed(control: str) -> None:
+    from agentsentinel.llm.prompts import sanitize_diagnostic
+
+    assert control not in sanitize_diagnostic(f"safe{control}text")
+
+
+def test_typed_assertion_gets_assertion_guidance() -> None:
+    assert classify(AssertionError("wrong value"))[0].value == "TEST_ASSERTION_VALUE_MISMATCH"

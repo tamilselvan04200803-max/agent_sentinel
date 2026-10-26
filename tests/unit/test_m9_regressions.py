@@ -160,3 +160,43 @@ def test_subset_keeps_no_newline_markers_and_file_metadata() -> None:
     assert "index 111..222" in first and "b/b.py" not in first
     assert "index 333..444" in second and "b/a.py" not in second
     assert "\r" not in first + second
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "for item in [1]:\n            return None\n        return 1",
+        "while flag:\n            return None\n        return 1",
+        "with manager():\n            return None\n        return 1",
+        "try:\n            return None\n        finally:\n            cleanup()\n        return 1",
+        "match value:\n            case 1:\n                return None\n            case _:\n                return 1",
+    ],
+)
+def test_compound_handlers_cannot_hide_swallowing_exits(body: str) -> None:
+    post = f"def f():\n    try:\n        work()\n    except Exception:\n        {body}\n"
+    with pytest.raises(OverfitPolicyError, match="exception"):
+        check_ast_bloat_and_debug_residue("a.py", "def f():\n    work()\n", post)
+
+
+def test_healing_preserves_removed_content_that_looks_like_a_file_header(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("-- old\nnext\n", encoding="utf-8", newline="\n")
+    raw = "--- a/a.py\n+++ b/a.py\n@@ -90,2 +90,2 @@\n--- old\n+++ new\n next\n"
+    healed = heal_diff_line_numbers(raw, tmp_path)
+    assert healed.was_healed
+    assert healed.healed_diff == raw.replace("@@ -90,2 +90,2 @@", "@@ -1,2 +1,2 @@")
+    parsed = UnifiedDiffParser.parse(healed.healed_diff)
+    assert parsed.target_paths == ("a.py",)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "with manager():\n            return fallback",
+        "try:\n            return fallback\n        finally:\n            cleanup()",
+        "match value:\n            case 1:\n                raise\n            case _:\n                return fallback",
+        "for item in values:\n            if item:\n                return item\n        return fallback",
+    ],
+)
+def test_compound_handlers_with_explicit_safe_outcomes_are_allowed(body: str) -> None:
+    post = f"def f():\n    try:\n        work()\n    except Exception:\n        {body}\n"
+    check_ast_bloat_and_debug_residue("a.py", "def f():\n    work()\n", post)

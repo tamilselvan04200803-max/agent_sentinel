@@ -306,23 +306,31 @@ class UnifiedDiffParser:
             ) from e
 
         hunk_lines: list[HunkLine] = []
+        consumed_old = consumed_new = 0
         i = start_idx + 1
         n = len(lines)
 
         while i < n:
             line = lines[i]
-            if line.startswith("@@ ") or line.startswith("diff --git ") or line.startswith("--- "):
+            if line.startswith(("@@ ", "diff --git ")) or (
+                line.startswith("--- ")
+                and consumed_old >= old_count and consumed_new >= new_count
+            ):
                 break
 
             if not line:
                 # An empty line in a unified diff is treated as an empty context line
                 hunk_lines.append(HunkLine(origin=" ", content=""))
+                consumed_old += 1
+                consumed_new += 1
                 i += 1
                 continue
 
             origin = line[0]
             if origin in ("+", "-", " ", "\\"):
                 hunk_lines.append(HunkLine(origin=origin, content=line[1:]))
+                consumed_old += origin in ("-", " ")
+                consumed_new += origin in ("+", " ")
             else:
                 # Stop parsing hunk if line does not have a hunk prefix
                 break

@@ -72,19 +72,69 @@ class _PublicAPI:
     bindings: dict[tuple[str, str], str]
 
 
+def _target_names(target: ast.AST) -> list[str]:
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for item in target.elts for name in _target_names(item)]
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    return []
+
+
+def _bound_names(statement: ast.stmt) -> list[str]:
+    if isinstance(statement, ast.Assign):
+        if (
+            len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.Name)
+            and statement.targets[0].id == statement.value.id
+        ):
+            return []
+        return [name for target in statement.targets for name in _target_names(target)]
+    if isinstance(statement, ast.AnnAssign):
+        return _target_names(statement.target) if statement.value is not None else []
+    if isinstance(statement, ast.AugAssign):
+        return _target_names(statement.target)
+    if isinstance(statement, ast.Delete):
+        return [name for target in statement.targets for name in _target_names(target)]
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [statement.name]
+    if isinstance(statement, ast.Import):
+        return [alias.asname or alias.name.split(".")[0] for alias in statement.names]
+    if isinstance(statement, ast.ImportFrom):
+        return [alias.asname or alias.name for alias in statement.names if alias.name != "*"]
+    return []
+
+
+def _update_aliases(statement: ast.stmt, aliases: dict[str, str]) -> None:
+    for name in _bound_names(statement):
+        aliases[name] = "<local>"
+    if isinstance(statement, ast.ImportFrom):
+        for alias in statement.names:
+            aliases[alias.asname or alias.name] = f"{statement.module}.{alias.name}"
+    elif isinstance(statement, ast.Import):
+        for alias in statement.names:
+            aliases[alias.asname or alias.name.split(".")[0]] = (
+                alias.name if alias.asname else alias.name.split(".")[0]
+            )
+
+
 def _public_api(tree: ast.Module) -> _PublicAPI:
     classes: set[str] = set()
     signatures: dict[tuple[str, str], FunctionSignatureSpec] = {}
     bindings: dict[tuple[str, str], str] = {}
     aliases: dict[str, str] = {}
-    for statement in tree.body:
-        if isinstance(statement, ast.ImportFrom):
-            for alias in statement.names:
-                aliases[alias.asname or alias.name] = f"{statement.module}.{alias.name}"
-        elif isinstance(statement, ast.Import):
-            for alias in statement.names:
-                aliases[alias.asname or alias.name] = alias.name
+
+    def remove(name: str) -> None:
+        classes.discard(name)
+        for key in list(signatures):
+            if key[0] == name or key[0].startswith(name + "."):
+                del signatures[key]
+                del bindings[key]
+
     for node in tree.body:
+        for name in _bound_names(node):
+            remove(name)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if not node.name.startswith("_"):
                 key = (node.name, "function")
@@ -98,16 +148,35 @@ def _public_api(tree: ast.Module) -> _PublicAPI:
                     "__init__", 0, ("self",), 0, False, frozenset(), frozenset(), False, False,
                 )
                 bindings[key] = "instance"
+            local_aliases = aliases.copy()
             for member in node.body:
-                if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                if member.name.startswith("_") and member.name != "__init__":
-                    continue
-                binding = _binding(member, aliases)
-                role = binding if binding in {"getter", "setter", "deleter"} else "method"
-                key = (f"{node.name}.{member.name}", role)
-                signatures[key] = _signature(member)
-                bindings[key] = binding
+                binding = (
+                    _binding(member, local_aliases)
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) else ""
+                )
+                # Accessor decorators clone the existing property. A fresh
+                # @property or ordinary definition replaces all prior accessors.
+                keeps_accessors = isinstance(
+                    member, (ast.FunctionDef, ast.AsyncFunctionDef),
+                ) and any(
+                    isinstance(decorator, ast.Attribute)
+                    and decorator.attr in {"getter", "setter", "deleter"}
+                    and isinstance(decorator.value, ast.Name)
+                    and decorator.value.id == member.name
+                    for decorator in member.decorator_list
+                )
+                if not keeps_accessors:
+                    for name in _bound_names(member):
+                        remove(f"{node.name}.{name}")
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                    not member.name.startswith("_") or member.name == "__init__"
+                ):
+                    role = binding if binding in {"getter", "setter", "deleter"} else "method"
+                    key = (f"{node.name}.{member.name}", role)
+                    signatures[key] = _signature(member)
+                    bindings[key] = binding
+                _update_aliases(member, local_aliases)
+        _update_aliases(node, aliases)
     return _PublicAPI(frozenset(classes), signatures, bindings)
 
 
