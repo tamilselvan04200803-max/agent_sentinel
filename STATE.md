@@ -1,8 +1,70 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M8 (Anti-Overfitting, Anti-Poisoning & Anti-Reflection Guard) — complete
-- **Previous Milestones:** M7 (AST Fault Localizer & Image Digest Pinning), M6 (Production CLI & Exporter), M5 (Evaluation Harness) — complete
-- **Milestone Gate Status:** VERIFIED (Full ground-truth verification on Windows + live Docker Desktop: 369 passed, 1 skipped, 0 failures)
+- **Current Active Milestone:** M12 complete; final independent review findings resolved.
+- **Previous Milestones:** M0-M11 complete, with live Docker milestone gates passing.
+- **Release Base:** `fdfa7cf`; the existing unpushed commit is preserved.
+
+## Executive architecture (M0-M12)
+
+| Milestone | Capability | Status |
+|---|---|---|
+| M0 | Immutable domain records and pytest verdicts | Complete |
+| M1 | Ephemeral workspaces and hardened Docker execution | Complete |
+| M2 | Diff parsing, path policy and hard-fail patch application | Complete |
+| M3 | Provider protocol, prompt construction and cost accounting | Complete |
+| M4 | Bounded lifecycle, deduplication and SQLite checkpoints | Complete |
+| M5 | Two-gate, reference-withholding benchmark admission | Complete |
+| M6 | CLI and approval-gated evidence export | Complete |
+| M7 | AST fault localization and image-digest resolution | Complete |
+| M8 | Literal-overfit, reflection and source-poisoning checks | Complete |
+| M9A | Unique exact-preimage healing with per-file cumulative offsets | Verified |
+| M9B | Complexity/debug/exception guards; rebased hunk candidates | Verified |
+| M10 | Additive, bounded changed-function mutation generator | Verified |
+| M11 | Declared public call-contract preservation | Verified |
+| M12 | Typed diagnostics and sanitized per-run retry feedback | Verified |
+
+## Current verification evidence (2026-10-26)
+
+- M9: **445 passed, 1 skipped**, including all 7 live Docker tests.
+- M10: **472 passed, 1 skipped**, including all 7 live Docker tests.
+- M11: **513 passed, 1 skipped**, including all 7 live Docker tests.
+- M12 focused state-machine, taxonomy and adversarial verification: **54 passed**.
+- Ruff: clean. Strict mypy: **39 source files**, no errors.
+- M12 pre-review full suite: **537 passed, 1 skipped**, including all 7 live Docker tests.
+- Final verbose release suite after review fixes: **566 passed, 1 skipped, 0 failures**
+  in **125.83 seconds**; all **7 live Docker integration tests passed**.
+- Skip: `test_block_symlink_escape`, expected without Windows symlink privileges.
+- Independent whole-feature review completed once; all findings were reproduced,
+  fixed and verified. No minor findings are deferred.
+- Docker Desktop was initially stopped and was started with approval. Docker-enabled
+  pytest uses a dedicated workspace temp directory and disables pytest's cache
+  to avoid Windows ACL conflicts with sandbox-created temporary/cache directories.
+
+## Independent review closure
+
+- Public API extraction now follows effective statement-order bindings, including
+  assignment/import/deletion and property replacement. Getter updates retain setters.
+- Broad-handler flow analysis accounts for loops, with, try/finally and match;
+  nested function exits cannot establish safety for the containing handler.
+- Diagnostic control/format characters are removed before neutralizing fences,
+  preventing removal from recreating a triple-backtick boundary.
+- Typed assertions receive assertion guidance. This was treated as a required
+  classifier correction because runtime guidance misdirected repair retries.
+- The inherited diff-parser ambiguity for removed text beginning `--- ` was
+  fixed because it prevented the healer from handling valid unified diffs.
+- Review regressions were observed failing before their fixes. The focused
+  review verification passed **144 tests**, followed by the full release run above.
+
+## Design boundaries
+
+- M10 is generation-only, with a separate additive API in `differential_mutation.py`;
+  the legacy mutation API is unchanged. Generated mutants are not an adequacy proof.
+- M9 hunk candidates do not implement an oracle-driven ddmin minimization loop.
+- M11 is a bounded static call-signature check, not a semantic or dynamic API proof.
+- M12 retries consume feedback scoped to the run; transport handling and attempt
+  accounting are preserved. Feedback remains process-local; SQLite schemas are unchanged.
+- Approval remains an **unkeyed SHA-256 integrity binding, not HMAC authentication**.
+  Key management, signer authentication and record migration are deferred.
 
 ## Completed & Verified Components
 
@@ -24,7 +86,7 @@
 | `tests/unit/test_m8_overfit_guard.py` | Comprehensive test suite for test literal extraction, constant folding (concat, decode, join), dictionary lookup tables, forbidden reflection, and patch hygiene checks. |
 | `tests/adversarial/test_adversarial_m8_overfit.py` | Adversarial attacks testing direct literal overfitting, obfuscated string-concatenation overfitting, runtime stack inspection cheating, BiDi/zero-width/homoglyph/mixed-indentation poisoning, and end-to-end multi-attempt state machine recovery. |
 
-## Verification Evidence
+## Historical verification evidence (M8)
 - Full Test Suite: `python -m pytest -p no:schemathesis -v` -> **368 passed, 1 skipped, 0 failed** in 63.07s.
   - Live Docker integration tests (`TestDockerLiveM1`, `TestDockerLiveM2PatchApplier`, `TestDockerLiveM5BenchmarkAdmission`) all **PASSED** against active Docker daemon.
   - 1 skipped test is Windows-expected unprivileged symlink creation.
@@ -40,3 +102,21 @@
 - **[2026-10-25 M7-2] Decision:** Fault localization hints are provided as read-only AST slices (Hop-0 and Hop-1) with prompt injection sanitization. Rationale: gives models targeted visibility into failure call stacks without exposing test fixtures or polluting context windows.
 - **[2026-10-25 M8-1] Decision:** Test-literal overfitting is checked by static constant folding and AST comparison analysis rather than dynamic runtime tracing. Rationale: static AST analysis catches obfuscated test leaks (string concat, decode, join, lookup tables) prior to container execution, eliminating runtime side-effects and saving container spin-up overhead.
 - **[2026-10-25 M8-2] Decision:** Unicode BiDi Trojan Source characters, zero-width characters, mixed tab-and-space indentation, and non-ASCII identifiers are rejected at policy validation. Rationale: prevents malicious visual spoofing, terminal output tampering, and Cyrillic/Greek homoglyph identifier backdoors.
+
+- **[2026-10-26 M9-1] Decision:** Heal only coordinates supported by unique exact
+  preimages; track hunk identity per file and accumulate every preceding line delta.
+  Revalidate the healed patch before git application. Empty insertion preimages do
+  not authorize relocation.
+- **[2026-10-26 M9-2] Decision:** Structural checks are independent of test literals.
+  Count debugger calls per scope, resolve direct import aliases, and reject newly
+  introduced bare or statically swallowing broad handlers.
+- **[2026-10-26 M10-1] Decision:** Preserve the whole-source mutation API and add a
+  deterministic changed-function generator capped at three results by default.
+  Validation parses/compiles ASTs without executing source; mutant execution is deferred.
+- **[2026-10-26 M11-1] Decision:** Preserve explicit public call contracts with
+  optional additions, descriptor checks and a default-on API guard.
+- **[2026-10-26 M12-1] Decision:** Classify typed failures before output evidence,
+  render fixed guidance and sanitize every retry diagnostic. Connect feedback
+  consumption by run ID, closing the earlier stored-but-unused feedback path.
+- **[2026-10-26 Approval-1] Decision:** Retain the existing SHA-256 approval format.
+  Do not describe it as a keyed signature; HMAC migration is outside this release.

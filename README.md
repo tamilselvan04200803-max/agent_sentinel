@@ -3,8 +3,8 @@
 AgentSentinel is a deterministic, sandboxed, evidence-first automated software
 repair engine. It proposes a bounded number of patches with an LLM, validates
 each patch against a strict policy, applies it only with `git apply`, verifies
-it in an isolated execution environment, and requires cryptographic human
-approval before an evidence bundle can be exported.
+it in an isolated execution environment, and requires explicit human
+approval bound to the verification evidence before an evidence bundle can be exported.
 
 The design goal is not to claim that an LLM is usually right. The goal is to
 make every repair attempt reproducible, attributable, cost-accounted, and
@@ -21,11 +21,14 @@ CaseSpec
   -> policy validation (allowlist, diff structure, protected paths)
   -> patch hygiene check (BiDi, zero-width, non-ASCII ids, mixed indentation)
   -> Tier-1 canonical-diff dedup
-  -> git apply (hard fail on rejected hunks; no silent fallback)
+  -> unique-preimage hunk-coordinate healing, then strict git apply validation
   -> Tier-2 Python AST equivalence dedup (rejects semantic no-ops)
   -> M8 anti-overfitting & anti-reflection guard (constant-folding test literal match)
+  -> M9 structural bloat, debugger and exception-swallowing checks
+  -> M11 public call-signature preservation
   -> sandbox verification (fresh workspace per attempt, pinned image digest)
-  -> AWAITING_HUMAN_APPROVAL
+  -> M12 categorized, sanitized retry feedback on failure
+  -> AWAITING_HUMAN_APPROVAL on passing verification
   -> approve / reject using sha256(diff_hash + image_digest + post_patch_hash)
   -> deterministic evidence bundle export (APPROVED runs only)
 ```
@@ -43,6 +46,52 @@ CaseSpec
 | M6 | Production CLI and deterministic evidence exporter | Complete |
 | M7 | Deterministic AST fault localizer & live image digest pinning | Complete |
 | M8 | Anti-overfitting, anti-poisoning & anti-reflection security kernel | Complete |
+| M9A | File-aware, unique-preimage hunk-coordinate healing | Complete |
+| M9B | Structural bloat/debug/exception guards and hunk-subset generation | Complete |
+| M10 | Bounded differential AST mutant generation; legacy API retained | Complete |
+| M11 | Public symbol, signature and descriptor preservation | Complete |
+| M12 | Typed failure taxonomy and sanitized per-run retry feedback | Complete |
+
+### M9-M12 interfaces and limits
+
+`generate_minimal_hunk_subsets(raw_diff)` emits deterministic single-hunk and
+unique drop-one candidates with rebased offsets. It does not run a test oracle
+or establish ddmin 1-minimality. Structural guards run even when no assertion
+literals are available; cyclomatic growth is limited to +5 by default.
+New bare handlers are rejected. Broad exception handlers must have statically
+recognized raising or explicit non-None return paths; this is a conservative
+syntax policy, not proof of semantic correctness.
+
+`generate_differential_patch_mutants(file_path, pre_source, post_source,
+max_mutants=3)` returns frozen `DifferentialPatchMutant` records with
+`file_path`, `function_name`, `mutation_description`, and `mutated_source`.
+It operates on changed or newly added function bodies, treats nested scopes
+separately, and validates generated syntax without executing it. Zero budget
+returns no mutants, negative budgets raise `ValueError`, and invalid source
+raises `SyntaxError`. The older whole-source `generate_patch_mutants` API and
+`PatchMutant` record remain available. Mutants are not automatically executed
+and their generation does not establish test adequacy.
+
+`verify_public_api_compatibility(file_path, pre_source, post_source)` preserves
+explicit public functions/classes, directly declared public methods and
+constructors, defaults, calling conventions, variadics and descriptor binding.
+Optional additions are allowed; existing `*args` payloads cannot be captured by
+new positional parameters. Dynamic/inherited APIs, arbitrary decorators,
+annotations, default-value semantics and behavioral contracts are outside the
+static model. `verify_not_overfitted(..., enforce_api_contract=False)` is an
+explicit opt-out for this guard; the default is `True`.
+
+`classify_attempt_failure(error, execution_result)` returns one of seven
+`FailureCategory` values and fixed corrective guidance. Typed exceptions take
+precedence over untrusted output. Retry diagnostics are bounded and sanitized,
+and feedback is isolated by run ID. Feedback is held in memory for the active
+process; the existing SQLite audit schema is unchanged. Transport and
+infrastructure lifecycle rules remain separate from repair classification.
+
+Approval records retain the existing unkeyed SHA-256 binding of the diff,
+image digest and execution-result hash. This is **not keyed HMAC authentication**
+and does not establish signer identity against an actor able to rewrite the
+stored record. Key management and approval-record migration are deferred.
 
 ## Safety and correctness invariants
 
@@ -209,15 +258,18 @@ LLM calls, tokens, and latency.
 
 ## Development and verification
 
-```bash
-python -m pytest
-python -m ruff check src tests
-python -m mypy --strict src
+```powershell
+.\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\python.exe -m mypy --strict src
+.\.venv\Scripts\python.exe -m pytest -p no:schemathesis -v
 ```
 
-Current M5/M6 verification: `306 passed, 6 skipped` (the six skips are live
-Docker integration tests in an environment without the required Docker setup),
-Ruff clean, and strict mypy clean.
+Verified on 2026-10-26 with Python 3.13.7 and live Docker Desktop:
+**566 passed, 1 skipped**, all seven live Docker tests passed, Ruff clean,
+and strict mypy clean across 39 source files. The skip is the expected
+unprivileged Windows symlink test. The release run disabled pytest's cache and
+used a dedicated `--basetemp` directory to avoid Windows permission conflicts.
+The final independent review findings were reproduced and fixed before this run.
 
 ## Honest limitations
 
