@@ -22,6 +22,12 @@ AgentSentinelError
 
 from __future__ import annotations
 
+from typing import Literal
+
+OverfitReason = Literal[
+    "overfit", "debug_residue", "exception_swallowing", "complexity_bloat", "api_contract",
+]
+
 
 class AgentSentinelError(Exception):
     """Root of the AgentSentinel exception hierarchy.
@@ -204,9 +210,12 @@ class OverfitPolicyError(PatchPolicyError):
         leaked_literal: str = "",
         file_path: str = "",
         message: str = "",
+        *,
+        reason_code: OverfitReason = "overfit",
     ) -> None:
         self.leaked_literal = leaked_literal
         self.file_path = file_path
+        self.reason_code = reason_code
         if message:
             super().__init__(message)
         elif leaked_literal or file_path:

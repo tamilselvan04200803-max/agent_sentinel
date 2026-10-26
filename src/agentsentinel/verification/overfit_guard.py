@@ -6,6 +6,7 @@ import ast
 from typing import TYPE_CHECKING
 
 from agentsentinel.domain.exceptions import OverfitPolicyError
+from agentsentinel.verification.contract_guard import verify_public_api_compatibility
 from agentsentinel.verification.patch_minimizer import check_ast_bloat_and_debug_residue
 
 if TYPE_CHECKING:
@@ -405,6 +406,8 @@ def verify_not_overfitted(
     post_patch_sources: Mapping[str, str],
     test_literals: frozenset[str | int | float] | None = None,
     raw_diff: str = "",
+    *,
+    enforce_api_contract: bool = True,
 ) -> None:
     """Raise OverfitPolicyError if post-patch violates anti-overfitting rules.
 
@@ -422,10 +425,15 @@ def verify_not_overfitted(
     else:
         literals = test_literals
 
-    for file_path, post_src in post_patch_sources.items():
+    for file_path in sorted(pre_patch_sources.keys() | post_patch_sources.keys()):
         if not file_path.endswith(".py"):
             continue
         pre_src = pre_patch_sources.get(file_path, "")
+        post_src = post_patch_sources.get(file_path, "")
+
+        check_ast_bloat_and_debug_residue(file_path, pre_src, post_src)
+        if enforce_api_contract:
+            verify_public_api_compatibility(file_path, pre_src, post_src)
 
         try:
             pre_tree = (
@@ -439,8 +447,6 @@ def verify_not_overfitted(
             post_tree = ast.parse(post_src, filename=file_path)
         except SyntaxError:
             continue
-
-        check_ast_bloat_and_debug_residue(file_path, pre_src, post_src)
 
         if not literals:
             continue
