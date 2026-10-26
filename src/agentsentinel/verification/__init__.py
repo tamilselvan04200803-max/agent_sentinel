@@ -18,6 +18,14 @@ from agentsentinel.verification.patch_minimizer import (
     compute_cyclomatic_complexity,
     generate_minimal_hunk_subsets,
 )
+from agentsentinel.verification.post_pass_gate import (
+    MinimizationSummary,
+    MutationAdequacySummary,
+    PostPassVerificationReport,
+    SurvivedMutantDetail,
+    run_ddmin_hunk_minimization,
+    run_mutation_adequacy_probe,
+)
 
 __all__ = [
     "DifferentialPatchMutant",
@@ -30,4 +38,10 @@ __all__ = [
     "generate_differential_patch_mutants",
     "generate_patch_mutants",
     "verify_not_overfitted",
+    "MinimizationSummary",
+    "MutationAdequacySummary",
+    "PostPassVerificationReport",
+    "run_ddmin_hunk_minimization",
+    "run_mutation_adequacy_probe",
+    "SurvivedMutantDetail",
 ]

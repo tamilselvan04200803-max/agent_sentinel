@@ -240,6 +240,9 @@ class RepairStateMachine:
     auto_approve_on_fix: bool = False
     source_workspace_override: Path | None = None
     enforce_overfit_guard: bool = True
+    enable_ddmin_minimization: bool = field(default=False, kw_only=True)
+    enable_mutation_probe: bool = field(default=False, kw_only=True)
+    max_mutants: int = field(default=3, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.container_runner is None:

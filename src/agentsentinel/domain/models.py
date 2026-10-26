@@ -162,6 +162,84 @@ class PatchProposal:
 
 
 # ---------------------------------------------------------------------------
+# MinimizationSummary — post-pass hunk minimization summary
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MinimizationSummary:
+    """Result of ddmin-style hunk minimization applied to a patch.
+
+    Attributes
+    ----------
+    raw_hunks_count:
+        Number of hunks in the original unified diff before minimization.
+    minimized_hunks_count:
+        Number of hunks remaining after minimization.
+    codeslop_hunks_removed:
+        Number of hunks removed because they consisted entirely of
+        non-functional "code slop" (e.g. inert imports, commented-out
+        blocks).
+    was_minimized:
+        ``True`` iff minimization was actually performed (i.e.
+        ``raw_hunks_count > minimized_hunks_count``).
+    """
+
+    raw_hunks_count: int
+    minimized_hunks_count: int
+    codeslop_hunks_removed: int
+    was_minimized: bool
+
+
+# ---------------------------------------------------------------------------
+# SurvivedMutantDetail — detail of a single surviving mutant
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SurvivedMutantDetail:
+    """Detail of a single mutant that survived test execution."""
+
+    mutant_id: str
+    file_path: str
+    function_name: str
+    mutation_description: str
+
+
+# ---------------------------------------------------------------------------
+# MutationAdequacySummary — post-pass mutation adequacy summary
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MutationAdequacySummary:
+    """Result of mutation adequacy probing after patch acceptance.
+
+    Attributes
+    ----------
+    low_mutation_adequacy:
+        ``True`` iff mutation score falls below the acceptable threshold.
+    total_mutants_evaluated:
+        Total number of mutants generated and executed.
+    mutants_killed:
+        Number of mutants successfully killed by the test suite.
+    mutants_survived:
+        Number of mutants that survived test execution.
+    mutation_score:
+        Fraction of mutants killed, in ``[0, 1]``.
+    survived_mutant_details:
+        Immutable tuple of ``SurvivedMutantDetail`` instances.
+    """
+
+    low_mutation_adequacy: bool
+    total_mutants_evaluated: int
+    mutants_killed: int
+    mutants_survived: int
+    mutation_score: float
+    survived_mutant_details: tuple[SurvivedMutantDetail, ...] = ()
+
+
+# ---------------------------------------------------------------------------
 # ExecutionResult — output from a sandbox run
 # ---------------------------------------------------------------------------
 
@@ -310,6 +388,8 @@ class EvidenceBundle:
     total_prompt_tokens: int
     total_completion_tokens: int
     attempts: int
+    minimization_summary: MinimizationSummary | None = None
+    mutation_adequacy_summary: MutationAdequacySummary | None = None
     # bundle_hash is computed in __post_init__
     bundle_hash: str = field(init=False, default="")
 
