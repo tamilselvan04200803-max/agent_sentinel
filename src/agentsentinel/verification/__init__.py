@@ -1,5 +1,9 @@
 """Verification package for anti-overfitting guards."""
 
+from agentsentinel.verification.differential_mutation import (
+    DifferentialPatchMutant,
+    generate_differential_patch_mutants,
+)
 from agentsentinel.verification.mutation_probe import (
     PatchMutant,
     generate_patch_mutants,
@@ -16,12 +20,14 @@ from agentsentinel.verification.patch_minimizer import (
 )
 
 __all__ = [
+    "DifferentialPatchMutant",
     "PatchMutant",
     "check_ast_bloat_and_debug_residue",
     "check_patch_hygiene",
     "compute_cyclomatic_complexity",
     "extract_test_assertion_literals",
     "generate_minimal_hunk_subsets",
+    "generate_differential_patch_mutants",
     "generate_patch_mutants",
     "verify_not_overfitted",
 ]
