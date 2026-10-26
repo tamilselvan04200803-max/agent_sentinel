@@ -65,6 +65,33 @@ def test_singleton_container_calls_preserve_order_and_use_safe_argv():
     }
 
 
+def test_large_module_payload_uses_disposable_file_transport(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "mod.py").write_text("ORIGINAL = True\n", encoding="utf-8", newline="\n")
+    large = DifferentialPatchMutant("mod.py", "check", "large", "#" + "x" * 45000 + "\n")
+    mounted_paths = []
+
+    def container(case_id, patch_hash, mounted, command):
+        assert len(subprocess.list2cmdline(command)) < 20000
+        assert command[-1].startswith("/workspace/")
+        assert mounted != source
+        mounted_paths.append(mounted)
+        data = json.loads((mounted / Path(command[-1]).name).read_text(encoding="utf-8"))
+        assert data["mutants"][0]["mutated_source"] == large.mutated_source
+        assert (mounted / "mod.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
+        return result()
+
+    runner = Mock()
+    runner.run_in_container.side_effect = container
+    assert run_in_container_mutation_batch(
+        runner=runner, case_id="case", patch_diff_hash="hash", workspace_host_path=source,
+        mutants=(large,), failing_test_ids=("test_mod.py::test_check",), baseline_wall_seconds=0.2,
+    ) == (True,)
+    assert list(source.iterdir()) == [source / "mod.py"]
+    assert all(not path.exists() for path in mounted_paths)
+
+
 @pytest.mark.parametrize("stdout", [
     "", "pytest failed", MARKER + "{}", MARKER + "not json",
     MARKER + '{"status":"setup_error"}',

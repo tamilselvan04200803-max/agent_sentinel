@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING
@@ -47,13 +48,13 @@ __all__ = [
 
 
 def _has_passing_evidence(result: ExecutionResult, expected_ids: tuple[str, ...]) -> bool:
-    # Match full first tokens, so a prefixed node ID cannot impersonate a test.
-    passed_ids = {
-        tokens[0]
-        for line in result.stdout.splitlines()
-        if len(tokens := line.split()) >= 2 and tokens[1] == "PASSED"
-    }
-    return result.exit_code == ExitCode.OK and set(expected_ids).issubset(passed_ids)
+    # Parameter IDs may contain spaces. Anchor the complete escaped ID to reject
+    # prefixed lookalikes while accepting normal verbose pytest output.
+    return result.exit_code == ExitCode.OK and all(
+        re.search(rf"^{re.escape(node)}\s+PASSED(?:\s|$)", result.stdout, re.MULTILINE)
+        is not None
+        for node in expected_ids
+    )
 
 
 def _test_command(spec: CaseSpec) -> list[str]:

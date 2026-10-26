@@ -1,5 +1,7 @@
 """Probe selected source artifacts without executing project source on the host."""
 
+from __future__ import annotations
+
 import sys
 import types
 from dataclasses import replace

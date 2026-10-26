@@ -104,3 +104,30 @@ def test_live_mutation_shadow_survival_failure_and_timeout(tmp_path: Path) -> No
     )
     assert killed == (False, True, True, True)
     assert (source / "m.py").read_text(encoding="utf-8") == fixed
+
+
+@pytest.mark.integration
+@skip_without_docker
+@skip_without_runner_image
+def test_live_large_mutant_file_transport_and_spaced_test_id(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    populate_source(source)
+    (source / "test_m.py").write_text(
+        "import pytest\nfrom m import normalize\n"
+        "@pytest.mark.parametrize('value', [' A '], ids=['hello world'])\n"
+        "def test_fix(value):\n    assert normalize(value) == 'a'\n",
+        encoding="utf-8", newline="\n",
+    )
+    fixed = "def normalize(s):\n    return s.strip().lower()\n"
+    (source / "m.py").write_text(fixed, encoding="utf-8", newline="\n")
+    mutant = DifferentialPatchMutant("m.py", "normalize", "large equivalent source",
+                                    fixed + "#" + "x" * 45000 + "\n")
+    killed = run_in_container_mutation_batch(
+        runner=HardenedContainerRunner(ContainerConfig(image=RUNNER_IMAGE)),
+        case_id="m13a-large", patch_diff_hash="accepted", workspace_host_path=source,
+        mutants=(mutant,), failing_test_ids=("test_m.py::test_fix[hello world]",),
+        baseline_wall_seconds=1.0,
+    )
+    assert killed == (False,)
+    assert (source / "m.py").read_text(encoding="utf-8") == fixed
+    assert not list(source.glob(".agentsentinel_mutation_*"))

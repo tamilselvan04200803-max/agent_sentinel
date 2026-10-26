@@ -1,5 +1,7 @@
 """Live gate selection with real policy/application and sandbox boundary doubles."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from difflib import unified_diff
 
@@ -88,6 +90,20 @@ def test_zero_or_one_hunk_reuses_original_without_execution(baseline, raw):
 def test_requires_original_passing_expected_nodes_before_short_circuit(baseline, original):
     with pytest.raises(ValueError, match="passing"):
         minimize(baseline, Runner(), raw="", original=original)
+
+
+@pytest.mark.parametrize("parameter", ["hello world", "label PASSED here"])
+def test_complete_parameterized_ids_with_spaces_can_be_verified(baseline, parameter):
+    expected = f"{TEST_ID}[{parameter}]"
+    evidence = result(stdout=f"{expected} PASSED [100%]\n")
+    runner = Runner(evidence)
+    selected, execution, summary = minimize(
+        baseline, runner, original=evidence,
+        case=replace(spec(), failing_test_ids=(expected,)),
+    )
+    assert summary.was_minimized
+    assert execution.expected_test_ids == (expected,)
+    assert "new comment" not in selected
 
 
 @pytest.mark.parametrize("verdict", [result(code=ExitCode.TESTS_FAILED), result(stdout="all good"), result(stdout=f"prefix{TEST_ID} PASSED\n"), HarnessTimeoutError(1, "pytest")])

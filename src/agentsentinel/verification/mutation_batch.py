@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import PurePosixPath, PureWindowsPath
+import os
+import shutil
+import subprocess
+import uuid
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Protocol
 
 from agentsentinel.domain.exceptions import HarnessSetupError, HarnessTimeoutError
 from agentsentinel.domain.exit_codes import ExitCode
+from agentsentinel.sandbox.workspace import WorkspaceManager
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
     from agentsentinel.domain.models import ExecutionResult
     from agentsentinel.verification.differential_mutation import DifferentialPatchMutant
@@ -53,6 +57,7 @@ import sys
 SOURCE = Path("/workspace")
 SHADOW = Path("/tmp/mut_workspace")
 MARKER = "AGENTSENTINEL_MUTATION_V1:"
+PAYLOAD_FILE = None
 
 
 def relative_path(value):
@@ -92,6 +97,8 @@ def copy_shadow():
                     raise ValueError("source symlink escapes workspace")
                 links.append((path.relative_to(root), resolved.relative_to(root)))
     shutil.copytree(root, SHADOW, symlinks=True)
+    if PAYLOAD_FILE is not None:
+        (SHADOW / PAYLOAD_FILE).unlink()
     # Remap even absolute internal source links into the disposable tree.
     for relative, target in links:
         copied = SHADOW / relative
@@ -157,9 +164,16 @@ def evaluate(mutant, test_ids, timeout):
 
 
 def main(serialized):
+    global PAYLOAD_FILE
     status = {"status": "setup_error"}
     code = 3
     try:
+        if serialized.startswith("/workspace/"):
+            payload_path = Path(serialized)
+            if payload_path.parent != SOURCE or not payload_path.resolve().is_relative_to(SOURCE):
+                raise ValueError("invalid payload file")
+            PAYLOAD_FILE = payload_path.name
+            serialized = payload_path.read_text(encoding="utf-8")
         payload = json.loads(serialized)
         timeout = payload["timeout_seconds"]
         if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 1:
@@ -231,6 +245,54 @@ def _read_outcome(result: ExecutionResult, case_id: str, patch_diff_hash: str) -
     return reports[record]
 
 
+def _execute_payload(
+    runner: ContainerRunnerProtocol,
+    case_id: str,
+    patch_diff_hash: str,
+    workspace: Path,
+    script: str,
+    payload: str,
+) -> ExecutionResult:
+    """Keep command arguments below Windows limits without modifying source."""
+    command = ["python", "-I", "-B", "-c", script, payload]
+    units = len(subprocess.list2cmdline(command).encode("utf-16-le")) // 2
+    # Reserve room for Docker flags and its workspace mount on Windows. This
+    # also avoids per-argument limits on Unix for large generated modules.
+    if units < 20000:
+        return runner.run_in_container(case_id, patch_diff_hash, workspace, command)
+    manager = WorkspaceManager()
+    with manager.create_workspace() as scratch:
+        destination = Path(scratch)
+        try:
+            root = workspace.resolve(strict=True)
+            links: list[tuple[Path, Path, bool]] = []
+            for directory, dirs, files in os.walk(root, followlinks=False):
+                for name in dirs + files:
+                    path = Path(directory) / name
+                    if path.is_symlink():
+                        resolved = path.resolve(strict=True)
+                        if not resolved.is_relative_to(root):
+                            raise ValueError("source symlink escapes workspace")
+                        links.append((path.relative_to(root), resolved.relative_to(root),
+                                      resolved.is_dir()))
+            shutil.copytree(root, destination, symlinks=True, dirs_exist_ok=True)
+            for relative, target, is_directory in links:
+                copied = destination / relative
+                copied.unlink()
+                copied.symlink_to(
+                    os.path.relpath(destination / target, copied.parent),
+                    target_is_directory=is_directory,
+                )
+            manager.scrub_git_history(destination)
+            name = f".agentsentinel_mutation_{uuid.uuid4().hex}.json"
+            with (destination / name).open("x", encoding="utf-8", newline="\n") as stream:
+                stream.write(payload)
+        except (OSError, ValueError) as error:
+            raise HarnessSetupError("Cannot stage mutation payload") from error
+        command[-1] = f"/workspace/{name}"
+        return runner.run_in_container(case_id, patch_diff_hash, destination, command)
+
+
 def run_in_container_mutation_batch(
     *,
     runner: ContainerRunnerProtocol,
@@ -275,9 +337,8 @@ def run_in_container_mutation_batch(
             separators=(",", ":"),
         )
         try:
-            result = runner.run_in_container(
-                case_id, patch_diff_hash, workspace_host_path,
-                ["python", "-I", "-B", "-c", script, payload],
+            result = _execute_payload(
+                runner, case_id, patch_diff_hash, workspace_host_path, script, payload,
             )
         except HarnessTimeoutError:
             outcomes.append(True)
