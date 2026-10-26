@@ -50,6 +50,7 @@ from agentsentinel.domain.exceptions import (
     HarnessSetupError,
     HarnessTimeoutError,
     InfrastructureFailureError,
+    OverfitPolicyError,
     PatchPolicyError,
     UnapprovedExportError,
 )
@@ -68,7 +69,7 @@ from agentsentinel.llm.exceptions import (
     LLMTimeoutError,
 )
 from agentsentinel.llm.pricing import CostEstimate, ModelUsage, PricingRegistry
-from agentsentinel.llm.prompts import PromptBuilder
+from agentsentinel.llm.prompts import PromptBuilder, sanitize_diagnostic
 from agentsentinel.localization.ast_slicer import localize_faults
 from agentsentinel.localization.traceback_parser import extract_traceback_frames
 from agentsentinel.orchestrator.checkpoint import (
@@ -84,6 +85,7 @@ from agentsentinel.orchestrator.dedup import (
     tier1_fingerprint,
     tier2_fingerprint,
 )
+from agentsentinel.orchestrator.failure_taxonomy import FailureCategory, classify_attempt_failure
 from agentsentinel.policy.applier import PatchApplicationError, apply_validated_patch
 from agentsentinel.policy.validator import PatchPolicyValidator
 from agentsentinel.sandbox.container import (
@@ -171,20 +173,30 @@ class AttemptFeedback:
     error_detail: str
     failing_stdout_snippet: str = ""
     failing_stderr_snippet: str = ""
+    failure_category: FailureCategory | None = None
+    remediation_directive: str = ""
 
     def to_prompt_block(self) -> str:
         return (
             f"\n## PREVIOUS ATTEMPT #{self.attempt_index} FEEDBACK\n"
-            f"Failure stage: {self.failure_stage}\n"
-            f"Error type: {self.error_type}\n"
-            f"Detail:\n{self.error_detail}\n"
+            f"Failure stage: {sanitize_diagnostic(self.failure_stage, 200)}\n"
+            f"Error type: {sanitize_diagnostic(self.error_type, 200)}\n"
+            f"Detail:\n{sanitize_diagnostic(self.error_detail)}\n"
             + (
-                f"stdout (last 2000 chars):\n```\n{self.failing_stdout_snippet[-2000:]}\n```\n"
+                f"Failure category: {self.failure_category.value}\n"
+                f"Corrective directive: {sanitize_diagnostic(self.remediation_directive, 1000)}\n"
+                if self.failure_category is not None
+                else ""
+            )
+            + (
+                "stdout (last 2000 chars):\n```\n"
+                f"{sanitize_diagnostic(self.failing_stdout_snippet[-2000:])}\n```\n"
                 if self.failing_stdout_snippet
                 else ""
             )
             + (
-                f"stderr (last 2000 chars):\n```\n{self.failing_stderr_snippet[-2000:]}\n```\n"
+                "stderr (last 2000 chars):\n```\n"
+                f"{sanitize_diagnostic(self.failing_stderr_snippet[-2000:])}\n```\n"
                 if self.failing_stderr_snippet
                 else ""
             )
@@ -241,6 +253,7 @@ class RepairStateMachine:
         self._pending_attempt_index: int | None = None
         self._baseline_ast_hash: str | None = None
         self._source_workspace: Path | None = self.source_workspace_override
+        self._feedback_by_run: dict[str, AttemptFeedback] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -527,6 +540,9 @@ class RepairStateMachine:
         feedback: AttemptFeedback | None = None,
     ) -> None:
         # Provision baseline workspace for prompt building
+        pending_feedback = self._feedback_by_run.pop(run_id, None)
+        if feedback is None:
+            feedback = pending_feedback
         src = self._get_source_workspace()
         pb = PromptBuilder(workspace_root=src)
         # Load baseline result to build prompt
@@ -734,6 +750,7 @@ class RepairStateMachine:
                 stage="VALIDATING_POLICY",
                 error_type=type(e).__name__,
                 error_detail=str(e),
+                error=e,
             )
             return
 
@@ -767,6 +784,7 @@ class RepairStateMachine:
                 stage="APPLYING_PATCH",
                 error_type="PatchApplicationError",
                 error_detail=str(e),
+                error=e,
             )
             return
         except HarnessSetupError as e:
@@ -849,6 +867,7 @@ class RepairStateMachine:
                     stage="VALIDATING_POLICY",
                     error_type=type(_e).__name__,
                     error_detail=str(_e),
+                    error=_e,
                 )
                 return
 
@@ -925,6 +944,7 @@ class RepairStateMachine:
                 stage="VERIFYING_IN_SANDBOX",
                 error_type="HarnessTimeoutError",
                 error_detail=str(e),
+                error=e,
             )
             return
 
@@ -1013,6 +1033,7 @@ class RepairStateMachine:
                 error_detail=result.stderr[-1000:],
                 stdout=result.stdout,
                 stderr=result.stderr,
+                execution_result=result,
             )
             return
 
@@ -1024,6 +1045,7 @@ class RepairStateMachine:
             error_detail="Failing tests: see stdout/stderr",
             stdout=result.stdout,
             stderr=result.stderr,
+            execution_result=result,
         )
 
     # ------------------------------------------------------------------
@@ -1062,18 +1084,30 @@ class RepairStateMachine:
         error_detail: str,
         stdout: str = "",
         stderr: str = "",
+        *,
+        error: Exception | None = None,
+        execution_result: ExecutionResult | None = None,
     ) -> None:
         """If more attempts remain, transition back to PROPOSING_PATCH with
         feedback; otherwise terminate."""
         rec = self._store.get_run(run_id)
         assert rec is not None
         if rec.attempts_used >= rec.max_attempts:
+            self._feedback_by_run.pop(run_id, None)
             self._store.set_termination(
                 run_id,
                 RunState.TERMINATED_FAILED,
                 TerminationReason.MAX_ATTEMPTS_EXHAUSTED,
             )
             return
+        category: FailureCategory | None = None
+        directive = ""
+        if error is not None or execution_result is not None:
+            category, directive = classify_attempt_failure(error, execution_result)
+        if isinstance(error, OverfitPolicyError):
+            # Keep the original diagnostic in the audit record, not test-derived
+            # literals in the next prompt. The directive is fixed trusted text.
+            error_detail = directive
         # Build feedback for next attempt and loop back by transitioning state
         feedback = AttemptFeedback(
             attempt_index=attempt_index,
@@ -1082,8 +1116,10 @@ class RepairStateMachine:
             error_detail=error_detail,
             failing_stdout_snippet=stdout,
             failing_stderr_snippet=stderr,
+            failure_category=category,
+            remediation_directive=directive,
         )
-        self._last_feedback = feedback
+        self._feedback_by_run[run_id] = feedback
         self._store.transition_state(run_id, RunState.PROPOSING_PATCH)
 
 

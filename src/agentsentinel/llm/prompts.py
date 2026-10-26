@@ -81,6 +81,12 @@ def _sanitize_content(content: str) -> str:
     return re.sub(r"[\u200b-\u200d\ufeff\u202a-\u202e\u2066-\u2069]", "", sanitized)
 
 
+def sanitize_diagnostic(content: str, max_chars: int = 2000) -> str:
+    """Bound a diagnostic field and strip fencing, Unicode and control poisoning."""
+    bounded = content[:max_chars].replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", _sanitize_content(bounded))
+
+
 def _read_file_safe(path: Path, max_chars: int = _MAX_FILE_CHARS) -> tuple[str, bool]:
     """Read a file safely, truncating at ``max_chars`` characters.
 

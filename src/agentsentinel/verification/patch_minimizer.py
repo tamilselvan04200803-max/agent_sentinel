@@ -179,12 +179,14 @@ def check_ast_bloat_and_debug_residue(
             leaked_literal="breakpoint/set_trace",
             file_path=file_path,
             message="Debug residue (breakpoint/set_trace) forbidden in repair patch",
+            reason_code="debug_residue",
         )
 
     if post_hazards.handlers - pre_hazards.handlers:
         raise OverfitPolicyError(
             file_path=file_path,
             message="New bare or swallowing exception handler forbidden in repair patch",
+            reason_code="exception_swallowing",
         )
 
     cc_delta = compute_cyclomatic_complexity(post_tree) - compute_cyclomatic_complexity(pre_tree)
@@ -192,6 +194,7 @@ def check_ast_bloat_and_debug_residue(
         raise OverfitPolicyError(
             leaked_literal=f"cc_delta={cc_delta}",
             file_path=file_path,
+            reason_code="complexity_bloat",
             message=(
                 f"Excessive cyclomatic complexity bloat: +{cc_delta} "
                 f"exceeds max_cc_delta={max_cc_delta}"
