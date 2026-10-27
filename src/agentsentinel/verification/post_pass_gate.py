@@ -90,12 +90,18 @@ def run_ddmin_hunk_minimization(
     spec: CaseSpec,
     runner: ContainerRunnerProtocol,
     original_result: ExecutionResult,
+    iterative: bool = False,
 ) -> tuple[str, ExecutionResult, MinimizationSummary]:
     """Select the first passing generated subset using pristine candidate copies.
 
     Singleton candidates precede drop-one candidates in deterministic order.
     This bounded single pass guarantees neither a global nor a 1-minimal patch.
     The caller must already hold visibly passing evidence for every failing ID.
+
+    ``iterative=True`` restarts after each accepted reduction. On a deterministic
+    policy/test oracle the result is 1-minimal among applicable, policy-accepted
+    nonempty hunk deletions. This does not prove a global optimum, essential
+    execution paths, or that individual mutants cannot be equivalent.
     """
     if not _has_passing_evidence(original_result, spec.failing_test_ids):
         raise ValueError("Minimization requires passing original test-node evidence")
@@ -107,6 +113,20 @@ def run_ddmin_hunk_minimization(
     unchanged = MinimizationSummary(count, count, 0, False)
     if count <= 1:
         return raw_diff, original_result, unchanged
+    if iterative:
+        selected, execution, selected_count = raw_diff, original_result, count
+        while selected_count > 1:
+            candidate, candidate_result, summary = run_ddmin_hunk_minimization(
+                raw_diff=selected, baseline_workspace=baseline_workspace, spec=spec,
+                runner=runner, original_result=execution,
+            )
+            if summary.minimized_hunks_count >= selected_count:
+                break
+            selected, execution = candidate, candidate_result
+            selected_count = summary.minimized_hunks_count
+        return selected, execution, MinimizationSummary(
+            count, selected_count, count - selected_count, selected_count < count,
+        )
 
     manager = WorkspaceManager()
     validator = PatchPolicyValidator(spec.allowed_edit_paths)
@@ -206,12 +226,15 @@ def run_mutation_adequacy_probe(
     runner: ContainerRunnerProtocol,
     max_mutants: int = 3,
     post_patch_result: ExecutionResult | None = None,
+    single_container_batch: bool = False,
 ) -> MutationAdequacySummary:
     """Evaluate a total capped set of selected-patch mutants through the sandbox.
 
     ``post_patch_result`` reuses the selected passing result and its measured
     wall time. Standalone callers may omit it to run one baseline verification.
     No baseline or mutant execution occurs when no eligible mutants exist.
+    ``single_container_batch=True`` opts into one verified V2 batch. Legacy
+    callers and protocol doubles retain singleton execution by default.
     """
     if max_mutants < 0:
         raise ValueError("max_mutants must be non-negative")
@@ -251,24 +274,37 @@ def run_mutation_adequacy_probe(
     if not _has_passing_evidence(baseline_result, spec.failing_test_ids):
         raise ValueError("Mutation probing requires passing selected-patch test-node evidence")
 
+    if single_container_batch:
+        verdicts = run_in_container_mutation_batch(
+            runner=runner, case_id=spec.case_id, patch_diff_hash=proposal.diff_hash,
+            workspace_host_path=patched_workspace, mutants=tuple(mutants),
+            failing_test_ids=spec.failing_test_ids,
+            baseline_wall_seconds=baseline_result.wall_seconds, single_container=True,
+        )
+        if len(verdicts) != len(mutants) or any(type(verdict) is not bool for verdict in verdicts):
+            raise HarnessSetupError("Mutation wrapper returned invalid batch verdicts")
+    else:
+        singleton_verdicts = []
+        for mutant in mutants:
+            try:
+                singleton = run_in_container_mutation_batch(
+                    runner=runner,
+                    case_id=spec.case_id,
+                    patch_diff_hash=proposal.diff_hash,
+                    workspace_host_path=patched_workspace,
+                    mutants=(mutant,),
+                    failing_test_ids=spec.failing_test_ids,
+                    baseline_wall_seconds=baseline_result.wall_seconds,
+                )
+                if len(singleton) != 1 or type(singleton[0]) is not bool:
+                    raise HarnessSetupError("Mutation wrapper returned invalid singleton verdict")
+                singleton_verdicts.append(singleton[0])
+            except HarnessTimeoutError:
+                singleton_verdicts.append(True)
+        verdicts = tuple(singleton_verdicts)
     killed = 0
     survived: list[SurvivedMutantDetail] = []
-    for mutant in mutants:
-        try:
-            verdicts = run_in_container_mutation_batch(
-                runner=runner,
-                case_id=spec.case_id,
-                patch_diff_hash=proposal.diff_hash,
-                workspace_host_path=patched_workspace,
-                mutants=(mutant,),
-                failing_test_ids=spec.failing_test_ids,
-                baseline_wall_seconds=baseline_result.wall_seconds,
-            )
-            if len(verdicts) != 1 or type(verdicts[0]) is not bool:
-                raise HarnessSetupError("Mutation wrapper returned invalid singleton verdict")
-            is_killed = verdicts[0]
-        except HarnessTimeoutError:
-            is_killed = True
+    for mutant, is_killed in zip(mutants, verdicts, strict=True):
         if is_killed:
             killed += 1
         else:

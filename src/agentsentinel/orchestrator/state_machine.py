@@ -250,6 +250,8 @@ class RepairStateMachine:
     enforce_overfit_guard: bool = True
     enable_ddmin_minimization: bool = field(default=False, kw_only=True)
     enable_mutation_probe: bool = field(default=False, kw_only=True)
+    enable_iterative_ddmin: bool = field(default=False, kw_only=True)
+    enable_single_container_mutation_batch: bool = field(default=False, kw_only=True)
     max_mutants: int = field(default=3, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -1000,7 +1002,10 @@ class RepairStateMachine:
                 patch, result, minimization, mutation = self._run_post_pass_checks(
                     patch, result, patched_ws,
                 )
-        except (HarnessSetupError, OSError, ValueError, SyntaxError, PatchPolicyError) as error:
+        except (
+            HarnessSetupError, HarnessTimeoutError, OSError, ValueError, SyntaxError,
+            PatchPolicyError,
+        ) as error:
             self._store.record_attempt_outcome(
                 run_id, attempt_index, AttemptStatus.TEST_FAILED,
                 error_type="PostPassInfrastructure", error_detail=str(error),
@@ -1111,6 +1116,7 @@ class RepairStateMachine:
             selected, result, minimization = run_ddmin_hunk_minimization(
                 raw_diff=patch.unified_diff, baseline_workspace=baseline, spec=self.spec,
                 runner=self.container_runner, original_result=result,
+                iterative=self.enable_iterative_ddmin,
             )
         with self._ws_mgr.create_workspace() as scratch:
             selected_ws = patched_ws
@@ -1129,6 +1135,7 @@ class RepairStateMachine:
                     minimized_diff=selected, baseline_workspace=baseline,
                     patched_workspace=selected_ws, spec=self.spec, runner=self.container_runner,
                     max_mutants=self.max_mutants, post_patch_result=result,
+                    single_container_batch=self.enable_single_container_mutation_batch,
                 )
             fingerprint = tier2_fingerprint(selected_ws, self.spec.allowed_edit_paths)
             self._selected_ast_hash = fingerprint.hex if fingerprint is not None else None
