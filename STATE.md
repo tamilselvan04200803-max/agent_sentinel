@@ -100,7 +100,8 @@
 - Release verification used the existing virtual environment with `-B`, no pytest
   cache provider and a fresh external workspace-owned basetemp, preserving the
   pre-existing `.pytest_tmp`. Log: `m15-release-tests.log` in the parent workspace.
-  Release base: `ddfb665`; publication target: `origin/main` via normal push.
+  Release base: `ddfb665`; verified implementation commit: `41a9ceb`.
+  Publication target: `origin/main` via normal push.
   Pre-existing primary AGENTS.md/cache edits are excluded; no old assertions changed.
 
 ## M14 architecture and verification (2026-10-27)
