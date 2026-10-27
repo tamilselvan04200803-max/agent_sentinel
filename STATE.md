@@ -90,7 +90,8 @@
 - Verification used the existing virtual environment with `-B`, disabled pytest's
   cache provider, and a fresh workspace-owned external basetemp to preserve the
   existing ACL-locked `.pytest_tmp`. Log: `m14-final-tests.log` in the parent workspace.
-  Release base: `ae3a2e4`; publication target: `origin/main` via normal push.
+  Release base: `ae3a2e4`; verified implementation commit: `8f40cd2`.
+  Publication target: `origin/main` via normal push.
   Pre-existing primary-checkout AGENTS.md and tracked cache edits are excluded.
 - References: [RFC 8785](https://www.rfc-editor.org/info/rfc8785/) and the
   [DSSE protocol](https://github.com/secure-systems-lab/dsse/blob/master/protocol.md).

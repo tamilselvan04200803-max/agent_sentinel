@@ -65,7 +65,8 @@
 
 - [x] Dispatch one read-only reviewer, reproduce and fix material findings with tests.
 - [x] Run separate Ruff, strict mypy and full pytest commands; record actual Docker results and skip reasons.
-- [ ] Mark Approval-1 resolved for M14 export attestations, document legacy compatibility and unkeyed/HMAC limitations, commit conventionally and push normally to origin/main.
+- [x] Mark Approval-1 resolved for M14 export attestations, document legacy compatibility and unkeyed/HMAC limitations, and commit conventionally.
+- Release operation: fast-forward main, push normally to origin/main, and verify the remote revision.
 
 ## Execution Record
 
@@ -79,3 +80,4 @@
 - Final review: malformed trusted fingerprint could raise UnicodeEncodeError. Regraded as a structured-verifier error-path defect despite no authentication bypass; that case and an adjacent environment-keyring encoding case failed first, then were fixed within the same review pass. No findings deferred.
 - Review rulings: legacy approval-record migration, unbound report text, warning-only timestamps, safe-integer token policy and old-export re-export requirements are documented directive/design boundaries. Verifier reads assume stable filesystem artifacts; concurrent writers and resource limits beyond JSON nesting depth are not claimed. The independent reviewer reported zero mismatches for 199,921 finite binary64 values against Node JSON.stringify.
 - Final fix verification: **161 focused tests passed**. Final full suite: **846 passed, 1 Windows symlink privilege skip, 0 failures** in **199.12 seconds**; all **10 live Docker integration tests** and all **121 M14 tests** passed. Ruff clean; strict mypy clean across **43 source files**. No original tests/assertions changed.
+- Verified implementation commit: `8f40cd2`. Release evidence is recorded in a following documentation-only commit.
