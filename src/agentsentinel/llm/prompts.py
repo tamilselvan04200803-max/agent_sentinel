@@ -27,10 +27,11 @@ import unicodedata
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
-from agentsentinel.localization.ast_slicer import pack_file_with_skeleton
+from agentsentinel.localization.ast_slicer import pack_file_with_skeleton, split_python_source_lines
+from agentsentinel.localization.context_packer import pack_file_with_token_budget
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from agentsentinel.domain.models import CaseSpec, ExecutionResult
@@ -57,7 +58,7 @@ def _add_line_numbers(source: str) -> str:
     str
         Source text with ``   1: `` prefixes.
     """
-    lines = source.splitlines()
+    lines = split_python_source_lines(source)
     width = len(str(len(lines)))
     return "\n".join(f"{i + 1:{width}d}: {line}" for i, line in enumerate(lines))
 
@@ -128,15 +129,33 @@ class PromptBuilder:
         Used to resolve ``CaseSpec.allowed_edit_paths`` for file content.
     max_file_chars:
         Maximum characters per source file included in the prompt.
+    max_file_tokens, count_tokens:
+        Optional hard token bound for each Python source block, measured after
+        sanitization using the supplied deterministic counter. Both are required
+        together. Prompt wrappers and other sections are outside this bound;
+        localization hint bodies are not duplicated in this mode.
     """
 
     def __init__(
         self,
         workspace_root: Path,
         max_file_chars: int = _MAX_FILE_CHARS,
+        *,
+        max_file_tokens: int | None = None,
+        count_tokens: Callable[[str], int] | None = None,
     ) -> None:
+        if (max_file_tokens is None) != (count_tokens is None):
+            raise ValueError("max_file_tokens and count_tokens must be supplied together")
+        if max_file_tokens is not None and max_file_tokens < 0:
+            raise ValueError("max_file_tokens must be nonnegative")
         self.workspace_root = workspace_root
         self.max_file_chars = max_file_chars
+        self.max_file_tokens = max_file_tokens
+        self.count_tokens = count_tokens
+
+    def _count_sanitized_tokens(self, content: str) -> int:
+        assert self.count_tokens is not None
+        return self.count_tokens(_sanitize_content(content))
 
     def build_repair_prompt(
         self,
@@ -235,17 +254,28 @@ class PromptBuilder:
             if rel_parts and rel_parts[0] == ".git":
                 continue
 
-            use_skeleton = localization_slices is not None and file_path.suffix == ".py"
+            use_token_budget = self.max_file_tokens is not None and file_path.suffix == ".py"
+            use_skeleton = (
+                localization_slices is not None or use_token_budget
+            ) and file_path.suffix == ".py"
             content, truncated = _read_file_safe(
                 file_path, None if use_skeleton else self.max_file_chars,
             )
             numbered: str | None = None
-            if use_skeleton and len(content) > self.max_file_chars:
+            if use_skeleton:
                 normalized_path = PurePosixPath(rel_path.replace("\\", "/"))
                 file_slices = [
                     sl for sl in (localization_slices or ())
                     if PurePosixPath(sl.file_path.replace("\\", "/")) == normalized_path
                 ]
+            if use_token_budget:
+                assert self.max_file_tokens is not None
+                token_packed = pack_file_with_token_budget(
+                    content, file_slices, self.max_file_tokens,
+                    count_tokens=self._count_sanitized_tokens,
+                )
+                numbered = _sanitize_content(token_packed.formatted_content)
+            elif use_skeleton and len(content) > self.max_file_chars:
                 try:
                     packed = pack_file_with_skeleton(content, file_slices, self.max_file_chars)
                 except ValueError:
@@ -275,8 +305,11 @@ class PromptBuilder:
                     f"### File: `{sl.file_path}` — symbol `{sl.symbol_name}` "
                     f"(lines {sl.start_line}-{sl.end_line}, hop {sl.hop_distance})"
                 )
-                safe_numbered = _sanitize_content(sl.numbered_source)
-                slice_blocks.append(f"{header}\n```\n{safe_numbered}\n```")
+                if self.max_file_tokens is None:
+                    safe_numbered = _sanitize_content(sl.numbered_source)
+                    slice_blocks.append(f"{header}\n```\n{safe_numbered}\n```")
+                else:
+                    slice_blocks.append(header)
             sections.append(
                 "## Fault Localization Hints (AST Slice)\n"
                 + "\n".join(slice_blocks)

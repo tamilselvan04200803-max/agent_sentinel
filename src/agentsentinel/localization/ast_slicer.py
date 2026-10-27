@@ -27,6 +27,15 @@ class LocalizationSlice:
     numbered_source: str
 
 
+def split_python_source_lines(source: str) -> list[str]:
+    """Split physical Python lines, preserving separators inside string literals."""
+    if not source:
+        return []
+    normalized = source.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    return lines[:-1] if normalized.endswith("\n") else lines
+
+
 def _normalize(path: str) -> str:
     return path.replace("\\", "/").strip().lstrip("./")
 
@@ -127,7 +136,7 @@ def localize_faults(
         except Exception:
             file_cache[norm_path] = None
             return None
-        all_lines = text.splitlines()
+        all_lines = split_python_source_lines(text)
         try:
             tree = ast.parse(text, filename=norm_path)
         except SyntaxError:
@@ -286,7 +295,7 @@ def skeletonize_python_source(
         raise TypeError("source must be a str")
     if "\x00" in source:
         raise ValueError("Binary or null-byte source is not allowed")
-    raw_lines = source.splitlines()
+    raw_lines = split_python_source_lines(source)
     if not raw_lines:
         return ""
     width = max(line_number_width, len(str(len(raw_lines))))
@@ -376,7 +385,7 @@ def pack_file_with_skeleton(
         raise TypeError("source must be a str")
     if "\x00" in source:
         raise ValueError("Binary or null-byte source is not allowed")
-    raw_lines = source.splitlines()
+    raw_lines = split_python_source_lines(source)
     width = max(5, len(str(len(raw_lines))))
     raw_numbered_content = "\n".join(
         f"{index + 1:{width}d}: {line}" for index, line in enumerate(raw_lines)
@@ -401,7 +410,7 @@ def pack_file_with_skeleton(
             return SkeletonPackResult(
                 formatted_content=formatted,
                 raw_line_count=len(raw_lines),
-                output_line_count=len(formatted.splitlines()),
+                output_line_count=len(split_python_source_lines(formatted)),
                 compression_ratio=1.0 - len(formatted) / max(1, len(raw_numbered_content)),
                 pruning_tier_used=tier,
                 used_syntax_fallback=used_syntax_fallback,

@@ -10,6 +10,11 @@ from agentsentinel.localization.ast_slicer import (
     pack_file_with_skeleton,
     skeletonize_python_source,
 )
+from agentsentinel.localization.context_packer import (
+    SkeletonTelemetry,
+    TokenBudgetPackResult,
+    pack_file_with_token_budget,
+)
 from agentsentinel.localization.traceback_parser import TracebackFrame, extract_traceback_frames
 
 __all__ = [
@@ -21,4 +26,7 @@ __all__ = [
     "merge_keep_spans",
     "pack_file_with_skeleton",
     "skeletonize_python_source",
+    "SkeletonTelemetry",
+    "TokenBudgetPackResult",
+    "pack_file_with_token_budget",
 ]
