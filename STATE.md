@@ -1,10 +1,10 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M13A complete; final implementation review findings resolved.
-- **Previous Milestones:** M0-M12 complete, with live Docker milestone gates passing.
+- **Current Active Milestone:** M13B complete; final review findings resolved and release gates passed.
+- **Previous Milestones:** M0-M13A complete, with live Docker milestone gates passing.
 - **Release Base:** `56d78e4`; existing history, including `fdfa7cf`, is preserved.
 
-## Executive architecture (M0-M13A)
+## Executive architecture (M0-M13B)
 
 | Milestone | Capability | Status |
 |---|---|---|
@@ -23,6 +23,53 @@
 | M11 | Declared public call-contract preservation | Verified |
 | M12 | Typed diagnostics and sanitized per-run retry feedback | Verified |
 | M13A | Post-pass subset search, mutation adequacy and approval-bound evidence | Verified |
+| M13B | Deterministic AST skeletons and tiered localized prompt context | Verified |
+
+## M13B architecture and verification (2026-10-27)
+
+- Additive localization APIs: `merge_keep_spans`, `skeletonize_python_source`,
+  `pack_file_with_skeleton`, and frozen `SkeletonPackResult`, exported through
+  `agentsentinel.localization`. Existing localization interfaces are unchanged.
+- AST folding preserves module/class interfaces, decorators, complete signatures,
+  and first docstring lines. Kept outer scopes still fold unselected nested siblings.
+  Default mode retains physical line count; compact mode retains original disk prefixes.
+- Signature tokenization returns immediately at the depth-zero colon, before
+  tokenizing a potentially incomplete multiline docstring. Syntax failures return
+  numbered raw source; null bytes/non-string input fail explicitly.
+- Packing keeps hop-0/hop-1 bodies, evicts hop-1, forces compact hop-0 output, then
+  folds all bodies. With default compact=True, Tiers 2/3 coincide; Tier 3 is useful
+  with compact=False. Tier 0 is reserved. A Tier 4 interface view can still exceed
+  budget; PromptBuilder then uses its legacy raw truncation and visible marker.
+- Both prompt entry points pack oversized Python files when localization is
+  supplied, including an empty slice sequence. Only matching file slices keep
+  bodies. Existing allowlist/path checks and prompt sanitization remain in effect.
+- These are character budgets, not exact token counts. Skeletons are context
+  views, not executable Python; folded multiline docstrings may remain open.
+  The cap applies to packed per-file source, not the entire prompt or its
+  existing separately rendered localization hints.
+- Baseline prompt/localization tests: **40 passed**. New skeletonizer tests were
+  observed failing before implementation: **27 missing-API failures**. Packing/
+  prompt tests then produced **15 expected failures** before integration.
+- Focused M13B plus existing prompt/localization verification: **89 passed**.
+  Ruff is clean; strict mypy checks **41 source files** without errors.
+- One independent final review found recursive traversal failing on a valid deep
+  expression and path normalization conflating `.config` with `config`. Three
+  regression tests reproduced these failures, then passed after iterative AST
+  traversal and component-aware POSIX path matching. **92 focused tests passed**;
+  Ruff and strict mypy remain clean. No review findings are deferred.
+- The initial sandboxed full suite had **712 passed, 11 skipped** in 144.19 seconds:
+  ten live Docker tests lacked named-pipe access, plus the existing Windows
+  symlink privilege skip. Docker 29.4.1 was verified outside that sandbox.
+- Final suite after review fixes, with Docker access: **725 passed, 1 skipped,
+  0 failures** in **157.77 seconds**. All **10 live Docker integration tests passed**.
+  The sole skip is `tests/unit/test_validator.py::test_block_symlink_escape`, because
+  this Windows user lacks symlink creation privileges. All **52 new M13B tests** pass.
+- Final checks use the existing virtual environment with `-B`, disable pytest's
+  cache provider and use a fresh workspace-owned external basetemp rather than
+  the pre-existing ACL-locked `.pytest_tmp`. Final log: `m13b-final-tests.log` in
+  the parent workspace. Ruff: clean; strict mypy: **41 source files**, no errors.
+- Release base: `646bb4a`; publication target: `origin/main` via a normal push.
+  Pre-existing primary-checkout AGENTS.md and tracked cache modifications are excluded.
 
 ## M13A architecture and verification (2026-10-26)
 

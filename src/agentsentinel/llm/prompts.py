@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import textwrap
 import unicodedata
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
+
+from agentsentinel.localization.ast_slicer import pack_file_with_skeleton
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -90,7 +93,7 @@ def sanitize_diagnostic(content: str, max_chars: int = 2000) -> str:
     return _sanitize_content(content[:max_chars])
 
 
-def _read_file_safe(path: Path, max_chars: int = _MAX_FILE_CHARS) -> tuple[str, bool]:
+def _read_file_safe(path: Path, max_chars: int | None = _MAX_FILE_CHARS) -> tuple[str, bool]:
     """Read a file safely, truncating at ``max_chars`` characters.
 
     Parameters
@@ -98,7 +101,7 @@ def _read_file_safe(path: Path, max_chars: int = _MAX_FILE_CHARS) -> tuple[str, 
     path:
         File path to read.
     max_chars:
-        Maximum characters to return.
+        Maximum characters to return, or None to read complete AST input.
 
     Returns
     -------
@@ -110,7 +113,7 @@ def _read_file_safe(path: Path, max_chars: int = _MAX_FILE_CHARS) -> tuple[str, 
     except OSError:
         return f"[ERROR: file not found or unreadable: {path}]", False
 
-    if len(raw) > max_chars:
+    if max_chars is not None and len(raw) > max_chars:
         return raw[:max_chars], True
     return raw, False
 
@@ -232,9 +235,29 @@ class PromptBuilder:
             if rel_parts and rel_parts[0] == ".git":
                 continue
 
-            content, truncated = _read_file_safe(file_path, self.max_file_chars)
-            sanitized = _sanitize_content(content)
-            numbered = _add_line_numbers(sanitized)
+            use_skeleton = localization_slices is not None and file_path.suffix == ".py"
+            content, truncated = _read_file_safe(
+                file_path, None if use_skeleton else self.max_file_chars,
+            )
+            numbered: str | None = None
+            if use_skeleton and len(content) > self.max_file_chars:
+                normalized_path = PurePosixPath(rel_path.replace("\\", "/"))
+                file_slices = [
+                    sl for sl in (localization_slices or ())
+                    if PurePosixPath(sl.file_path.replace("\\", "/")) == normalized_path
+                ]
+                try:
+                    packed = pack_file_with_skeleton(content, file_slices, self.max_file_chars)
+                except ValueError:
+                    # Null-byte content cannot be parsed; retain the legacy fallback.
+                    packed = None
+                if packed is not None and len(packed.formatted_content) <= self.max_file_chars:
+                    numbered = _sanitize_content(packed.formatted_content)
+                else:
+                    content = content[:self.max_file_chars]
+                    truncated = True
+            if numbered is None:
+                numbered = _add_line_numbers(_sanitize_content(content))
 
             file_block = f"### File: `{rel_path}`\n```\n{numbered}\n```\n"
             if truncated:

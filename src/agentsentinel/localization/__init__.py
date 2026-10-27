@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from agentsentinel.localization.ast_slicer import LocalizationSlice, localize_faults
+from agentsentinel.localization.ast_slicer import (
+    LocalizationSlice,
+    SkeletonPackResult,
+    localize_faults,
+    merge_keep_spans,
+    pack_file_with_skeleton,
+    skeletonize_python_source,
+)
 from agentsentinel.localization.traceback_parser import TracebackFrame, extract_traceback_frames
 
 __all__ = [
@@ -10,4 +17,8 @@ __all__ = [
     "extract_traceback_frames",
     "LocalizationSlice",
     "localize_faults",
+    "SkeletonPackResult",
+    "merge_keep_spans",
+    "pack_file_with_skeleton",
+    "skeletonize_python_source",
 ]

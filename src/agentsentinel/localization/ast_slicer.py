@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import tokenize
 from dataclasses import dataclass
+from io import StringIO
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -222,3 +224,186 @@ def localize_faults(
                 return slices[:max_slices]
 
     return slices[:max_slices]
+
+
+def merge_keep_spans(keep_spans: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Normalize positive, closed disk-line intervals and merge adjacent spans."""
+    normalized: list[tuple[int, int]] = []
+    for start, end in keep_spans:
+        if start < 1 or end < 1:
+            raise ValueError("keep span bounds must be positive 1-indexed lines")
+        normalized.append((min(start, end), max(start, end)))
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(normalized):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _get_function_signature_end(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    source_lines: Sequence[str],
+) -> int:
+    """Find the signature colon without tokenizing the following docstring."""
+    search_start = node.lineno
+    search_end = node.body[0].lineno if node.body else (node.end_lineno or search_start)
+    snippet = "\n".join(source_lines[search_start - 1:search_end])
+    paren_depth = 0
+    try:
+        for tok_type, tok_str, (start_row, _), _, _ in tokenize.generate_tokens(
+            StringIO(snippet).readline
+        ):
+            if tok_type != tokenize.OP:
+                continue
+            if tok_str in ("(", "[", "{"):
+                paren_depth += 1
+            elif tok_str in (")", "]", "}"):
+                paren_depth -= 1
+            elif tok_str == ":" and paren_depth == 0:
+                return search_start + start_row - 1
+    except (tokenize.TokenError, IndentationError):
+        return search_start
+    return search_start
+
+
+def skeletonize_python_source(
+    source: str,
+    keep_spans: Sequence[tuple[int, int]] = (),
+    *,
+    compact: bool = False,
+    line_number_width: int = 5,
+) -> str:
+    """Fold unselected functions into numbered prompt context, never executing source.
+
+    Default output preserves physical line count. Compact output elides folded
+    continuation lines but retains disk coordinates. Syntax errors return raw
+    numbered source; non-string and null-byte inputs are hard failures.
+    """
+    if not isinstance(source, str):
+        raise TypeError("source must be a str")
+    if "\x00" in source:
+        raise ValueError("Binary or null-byte source is not allowed")
+    raw_lines = source.splitlines()
+    if not raw_lines:
+        return ""
+    width = max(line_number_width, len(str(len(raw_lines))))
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, IndentationError):
+        return "\n".join(f"{i + 1:{width}d}: {line}" for i, line in enumerate(raw_lines))
+
+    merged_spans = merge_keep_spans(keep_spans)
+    folds: list[tuple[int, int, str]] = []
+
+    pending: list[ast.AST] = [tree]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fn_start = min((d.lineno for d in node.decorator_list), default=node.lineno)
+            fn_end = node.end_lineno or node.lineno
+            if not any(start <= fn_end and end >= fn_start for start, end in merged_spans):
+                sig_end = _get_function_signature_end(node, raw_lines)
+                doc_keep_line = sig_end
+                if node.body:
+                    first = node.body[0]
+                    if (
+                        isinstance(first, ast.Expr)
+                        and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str)
+                    ):
+                        doc_keep_line = first.lineno
+                fold_start = max(sig_end, doc_keep_line) + 1
+                if fold_start <= fn_end:
+                    first_folded = raw_lines[fold_start - 1]
+                    indent = first_folded[:len(first_folded) - len(first_folded.lstrip())]
+                    if not first_folded.strip():
+                        header = raw_lines[node.lineno - 1]
+                        indent = header[:len(header) - len(header.lstrip())] + "    "
+                    folds.append((fold_start, fn_end, indent))
+                # An outer fold owns its entire range, including all inner scopes.
+                continue
+            pending.extend(reversed(node.body))
+            continue
+        pending.extend(reversed(list(ast.iter_child_nodes(node))))
+    output_lines = raw_lines.copy()
+    omitted: set[int] = set()
+    for start, end, indent in folds:
+        output_lines[start - 1] = (
+            f"{indent}# ... [lines {start}-{end} omitted by AST skeletonizer] ..."
+        )
+        for index in range(start, end):
+            output_lines[index] = ""
+            if compact:
+                omitted.add(index)
+    return "\n".join(
+        f"{index + 1:{width}d}: {line}"
+        for index, line in enumerate(output_lines)
+        if index not in omitted
+    )
+
+
+@dataclass(frozen=True)
+class SkeletonPackResult:
+    """Character-based context compression statistics; tier zero is reserved."""
+
+    formatted_content: str
+    raw_line_count: int
+    output_line_count: int
+    compression_ratio: float
+    pruning_tier_used: int
+    used_syntax_fallback: bool
+
+
+def pack_file_with_skeleton(
+    source: str,
+    slices: Sequence[LocalizationSlice],
+    max_chars: int,
+    *,
+    compact: bool = True,
+) -> SkeletonPackResult:
+    """Evict hop-1 bodies before hop-0 bodies, then return a pure interface view.
+
+    Tier 4 may exceed the budget when even interfaces cannot fit. The caller
+    owns the final truncation fallback. This is a character ceiling, not an
+    exact tokenizer count. With compact=True, tiers 2 and 3 are equivalent.
+    """
+    if max_chars < 0:
+        raise ValueError("max_chars must be nonnegative")
+    if not isinstance(source, str):
+        raise TypeError("source must be a str")
+    if "\x00" in source:
+        raise ValueError("Binary or null-byte source is not allowed")
+    raw_lines = source.splitlines()
+    width = max(5, len(str(len(raw_lines))))
+    raw_numbered_content = "\n".join(
+        f"{index + 1:{width}d}: {line}" for index, line in enumerate(raw_lines)
+    )
+    used_syntax_fallback = False
+    try:
+        ast.parse(source)
+    except (SyntaxError, IndentationError):
+        used_syntax_fallback = True
+
+    all_spans = [(sl.start_line, sl.end_line) for sl in slices if sl.hop_distance in (0, 1)]
+    hop0_spans = [(sl.start_line, sl.end_line) for sl in slices if sl.hop_distance == 0]
+    tiers: tuple[tuple[int, Sequence[tuple[int, int]], bool], ...] = (
+        (1, all_spans, compact),
+        (2, hop0_spans, compact),
+        (3, hop0_spans, True),
+        (4, [], True),
+    )
+    for tier, keep_spans, use_compact in tiers:
+        formatted = skeletonize_python_source(source, keep_spans, compact=use_compact)
+        if len(formatted) <= max_chars or tier == 4:
+            return SkeletonPackResult(
+                formatted_content=formatted,
+                raw_line_count=len(raw_lines),
+                output_line_count=len(formatted.splitlines()),
+                compression_ratio=1.0 - len(formatted) / max(1, len(raw_numbered_content)),
+                pruning_tier_used=tier,
+                used_syntax_fallback=used_syntax_fallback,
+            )
+    raise AssertionError("tier 4 must return a skeleton")
