@@ -55,8 +55,8 @@
 
 - [x] Dispatch one read-only reviewer against the complete diff; resolve material findings with reproducing tests.
 - [x] Run separate Ruff, strict mypy and full pytest commands, including actual Docker tests when available.
-- [ ] Record observed totals/skips and limitations in STATE.md; inspect diff/status and commit conventionally.
-- [ ] Fast-forward main and push normally to origin/main; verify remote revision and preserve pre-existing edits.
+- [x] Record observed totals/skips and limitations in STATE.md; inspect diff/status and commit conventionally.
+- Release operation: fast-forward main and push normally to origin/main; verify remote revision and preserve pre-existing edits.
 
 ## Execution Record
 
@@ -68,3 +68,4 @@
 - Review rulings: keep prescribed splitlines semantics, single-line bodies, open retained docstrings, Tier 4 overflow and coincident default Tiers 2/3. These are explicit directive boundaries. Existing localization hints retain their separate rendering and security behavior; this change bounds only packed per-file context, not the entire prompt.
 - Initial full run: **712 passed, 11 skipped** (ten Docker tests blocked by sandbox pipe permissions plus the Windows symlink test). Docker 29.4.1 verified outside the sandbox; final run uses that access and a fresh external basetemp to preserve the existing ACL-locked `.pytest_tmp` directory.
 - Final suite after fixes: **725 passed, 1 skipped, 0 failures** in **157.77 seconds**. All **10 live Docker tests passed**. The sole skip is the existing Windows symlink privilege test. All **52 M13B tests** pass. Final Ruff and strict mypy: clean, **41 source files**.
+- Verified implementation commit: `716dc39`. Release documentation follows in a separate conventional commit; only documentation changes after verification.

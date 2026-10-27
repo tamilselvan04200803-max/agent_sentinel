@@ -68,7 +68,8 @@
   cache provider and use a fresh workspace-owned external basetemp rather than
   the pre-existing ACL-locked `.pytest_tmp`. Final log: `m13b-final-tests.log` in
   the parent workspace. Ruff: clean; strict mypy: **41 source files**, no errors.
-- Release base: `646bb4a`; publication target: `origin/main` via a normal push.
+- Release base: `646bb4a`; verified implementation commit: `716dc39`.
+  Publication target: `origin/main` via a normal push.
   Pre-existing primary-checkout AGENTS.md and tracked cache modifications are excluded.
 
 ## M13A architecture and verification (2026-10-26)
