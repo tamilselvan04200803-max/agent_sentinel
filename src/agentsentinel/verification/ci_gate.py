@@ -78,7 +78,7 @@ def usage_error_report(message: str, raw_diff: str = "") -> CIGateReport:
         "Provide a valid text diff and its pristine base workspace",
     )
     return CIGateReport(
-        "FAILED",
+        "USAGE_ERROR",
         2,
         0.0,
         1,
@@ -142,7 +142,12 @@ def run_ci_gate_audit(
         root = workspace_root.resolve()
         if allowed_edit_paths is not None:
             allowed_edit_paths = tuple(contained_path(path, root) for path in allowed_edit_paths)
-        literals = extract_test_assertion_literals(root, test_paths=_test_paths(root))
+        try:
+            literals = extract_test_assertion_literals(
+                root, test_paths=_test_paths(root), strict=True,
+            )
+        except (ValueError, OSError, UnicodeError) as exc:
+            raise CIGateUsageError("Repository test source cannot be analyzed safely") from exc
         violations: list[CIGateViolation] = []
         metrics: list[FileAuditMetrics] = []
         for entry in entries:

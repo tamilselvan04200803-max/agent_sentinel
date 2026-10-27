@@ -335,6 +335,7 @@ def extract_test_assertion_literals(
     workspace_root: Path,
     *,
     test_paths: Sequence[Path] | None = None,
+    strict: bool = False,
 ) -> frozenset[str | int | float]:
     """Collect non-trivial literals from Assert and parametrize nodes in test files."""
     seen: set[Path] = set()
@@ -349,11 +350,15 @@ def extract_test_assertion_literals(
         seen.add(p)
         try:
             src = p.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeError):
+            if strict:
+                raise
             continue
         try:
             tree = ast.parse(src, filename=str(p))
         except SyntaxError:
+            if strict:
+                raise ValueError("Repository test source is not valid Python") from None
             continue
 
         for node in ast.walk(tree):

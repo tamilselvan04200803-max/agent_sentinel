@@ -6,7 +6,7 @@ import ast
 import os
 import tokenize
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from io import StringIO
 from typing import TYPE_CHECKING
@@ -464,10 +464,13 @@ def analyze_entry(
             ERR_M13C_ABRUPT_FINALLY_EXIT: "EXC-001",
             ERR_M13C_CONTEXT_SUPPRESSION: "EXC-001",
         }.get(finding.code, "IMP-001")
-        if any(
-            item.rule_id == rule and item.line_number == finding.line_number
-            for item in violations
-        ):
+        duplicate = next((
+            index for index, item in enumerate(violations)
+            if item.rule_id == rule and item.line_number == finding.line_number
+        ), None)
+        if duplicate is not None:
+            item = violations[duplicate]
+            violations[duplicate] = replace(item, message=f"{finding.code}: {item.message}")
             continue
         add(
             rule, finding.line_number, f"{finding.code}: {finding.message}",

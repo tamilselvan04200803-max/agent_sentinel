@@ -255,8 +255,15 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_bundle(args: argparse.Namespace) -> int:
+    if bool(args.bundle_dir) == bool(args.bundle_dir_positional):
+        print(json.dumps({
+            "error": "invalid_argument",
+            "detail": "Provide one bundle directory, positionally or with --bundle-dir",
+        }))
+        return 2
     report = verify_exported_bundle(
-        Path(args.bundle_dir), require_keyed=args.require_keyed, signing_key=args.signing_key,
+        Path(args.bundle_dir or args.bundle_dir_positional),
+        require_keyed=args.require_keyed, signing_key=args.signing_key,
     )
     print(json.dumps(report.to_dict(), sort_keys=True))
     return report.exit_code
@@ -391,7 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
     pe.set_defaults(func=_cmd_export)
 
     pv = sub.add_parser("verify-bundle", help="Verify an exported bundle offline")
-    pv.add_argument("--bundle-dir", required=True)
+    pv.add_argument("bundle_dir_positional", nargs="?", help="Exported bundle directory")
+    pv.add_argument("--bundle-dir", default=None, help="Legacy bundle directory option")
     pv.add_argument("--require-keyed", action="store_true")
     pv.add_argument("--signing-key", default=None)
     pv.set_defaults(func=_cmd_verify_bundle)

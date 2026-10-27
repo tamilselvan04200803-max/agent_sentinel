@@ -45,8 +45,16 @@ class BundleVerificationReport:
     warnings: tuple[str, ...]
     exit_code: int
 
+    @property
+    def event(self) -> str | None:
+        """Derived failure telemetry; does not enter signed evidence payloads."""
+        return (
+            f"EVENT_G{self.exit_code // 10}_FAILED"
+            if self.exit_code in {10, 20, 30, 40, 50} else None
+        )
+
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        return {**asdict(self), "event": self.event}
 
 
 class _PathViolation(ValueError):
