@@ -6,6 +6,9 @@ each patch against a strict policy, applies it only with `git apply`, verifies
 it in an isolated execution environment, and requires explicit human
 approval bound to the verification evidence before an evidence bundle can be exported.
 
+The standalone `agentsentinel ci-gate` command audits pull-request diffs without
+LLM calls, Docker, network access or executing repository code.
+
 The design goal is not to claim that an LLM is usually right. The goal is to
 make every repair attempt reproducible, attributable, cost-accounted, and
 auditable — including the failures.
@@ -53,6 +56,9 @@ CaseSpec
 | M11 | Public symbol, signature and descriptor preservation | Complete |
 | M12 | Typed failure taxonomy and sanitized per-run retry feedback | Complete |
 | M13A | Live post-pass subset minimization and mutation adequacy evidence | Complete |
+| M13B | Line-accurate AST skeletonization and tiered prompt context | Complete |
+| M14 | Canonical JCS/DSSE PAE provenance and optional HMAC offline verification | Complete |
+| M15 | Standalone read-only PR audit with complete staged diagnostics | Complete |
 
 ### M9-M12 interfaces and limits
 
@@ -94,6 +100,10 @@ Approval records retain the existing unkeyed SHA-256 binding of the diff,
 image digest and execution-result hash. This is **not keyed HMAC authentication**
 and does not establish signer identity against an actor able to rewrite the
 stored record. Key management and approval-record migration are deferred.
+M14 exports additionally support HMAC-SHA256 over domain-separated DSSE PAE and
+RFC 8785 canonical JSON. Configure `AGENTSENTINEL_SIGNING_KEY` and verify with
+`agentsentinel verify-bundle --bundle-dir <path> --require-keyed`; legacy internal
+approval records keep their original format. See STATE.md for the trust boundaries.
 
 ### M13A post-pass verification
 
@@ -128,6 +138,57 @@ approval binding. Original proposal/result records are retained for audit.
 Runs created before M13A retain their export behavior and database schema.
 Large mutant payloads travel through a disposable JSON control file to stay
 within Windows command limits. Control files are excluded from the test shadow.
+
+### M15 standalone CI gate
+
+```powershell
+agentsentinel ci-gate --workspace C:\checkouts\base --diff C:\ci\change.diff --json-out C:\ci\audit.json --markdown-out C:\ci\summary.md
+```
+
+`--workspace` must contain the exact **pre-patch/base revision**, not the PR head.
+The diff is parsed, coordinate drift is healed in memory, and modified/created/
+deleted/renamed source buffers are reconstructed without writing source files or
+calling `git apply`. Report destinations must be outside that workspace and must
+not overwrite the input diff or each other. JSON is also emitted to stdout.
+Use `--markdown-out $env:GITHUB_STEP_SUMMARY` on a configured GitHub runner to
+write the step-summary table; the gate itself makes no GitHub API calls.
+
+Five stages aggregate path/test/allowlist, lexical/debugger, test-literal and
+reflection, complexity/exception, and public API violations across all files.
+Results sort by file, line, stage and rule. JSON includes version `15.0.0`, raw
+input diff SHA-256 after CRLF normalization, metrics, counts and measured runtime.
+The Markdown summary includes per-file CC growth, API status and corrective advice.
+
+- Exit **0**: no errors; warnings are permitted.
+- Exit **1**: errors, or warnings with `--strict-warnings`.
+- Exit **2**: invalid workspace/diff, unsafe paths, reconstruction failure or invalid output arguments.
+
+`--max-cc-delta` defaults to **10** for this command. Both per-file and per-function
+growth are checked; complexity warnings keep their WARNING severity when strict
+mode makes the command fail. The repair pipeline's separate +5 default is unchanged.
+Programmatic `run_ci_gate_audit(raw_diff, workspace_root, *, allowed_edit_paths=None,
+allow_test_edits=False, max_cc_delta=10, strict_warnings=False)` and both renderers
+are exported from `agentsentinel.verification`.
+
+Infrastructure paths are protected, and both rename endpoints are checked.
+Windows casing aliases receive the same policy/language checks; ambiguous Win32
+dot/space/stream aliases fail as usage errors. Occupied rename destinations must
+be vacated by another audited section, with case-only renames preserved.
+Existing test-file modification/deletion is protected; `allow_test_edits=True`
+relaxes only that path rule, not the other static policies. New test files are
+not classified as modified tests. Non-Python files still receive path/hygiene
+checks. Invalid post-Python produces SYN-001. Test-literal collection excludes
+VCS, environment, cache and vendor directories and does not execute tests.
+
+This is bounded static policy, not a sandbox, a behavioral compatibility proof,
+or a guarantee of complete dynamic-alias detection. Literal matching can flag
+intentional constants. M15 allows recognized logging in broad handlers; bare
+handlers remain errors. Missing prerequisites prevent a complete audit and use
+exit 2. Git C-quoted path names are currently rejected as unsupported. Inputs
+must remain stable while read. The <500ms SLA is tested on a representative
+40-function fixture, not guaranteed for arbitrarily large repositories.
+Only regular text-file modes/preimages are supported; symlink, directory and
+submodule mode records fail with usage code 2 instead of being treated as code.
 
 ## Safety and correctness invariants
 
@@ -300,12 +361,14 @@ LLM calls, tokens, and latency.
 .\.venv\Scripts\python.exe -m pytest -p no:schemathesis -v
 ```
 
-Verified on 2026-10-26 with Python 3.13.7 and live Docker Desktop:
-**673 passed, 1 skipped** in **195.77 seconds**, all ten live Docker tests passed,
-Ruff clean, and strict mypy clean across 41 source files. The skip is the expected
+Verified on 2026-10-27 with Python 3.13.7 and live Docker Desktop:
+**972 passed, 1 skipped** in **86.33 seconds**, all ten live Docker tests passed,
+Ruff clean, and strict mypy clean across 46 source files. The skip is the expected
 unprivileged Windows symlink test. The release run disabled pytest's cache and
 used a dedicated `--basetemp` directory to avoid Windows permission conflicts.
 The final independent review findings were reproduced and fixed before this run.
+All 126 M15 tests pass, including the representative <500ms audit SLA and
+workspace byte-preservation tests. See STATE.md for release evidence and limits.
 
 ## Honest limitations
 

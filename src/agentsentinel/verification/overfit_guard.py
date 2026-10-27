@@ -10,7 +10,7 @@ from agentsentinel.verification.contract_guard import verify_public_api_compatib
 from agentsentinel.verification.patch_minimizer import check_ast_bloat_and_debug_residue
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping, Sequence
     from pathlib import Path
 
 # Unicode BiDi Trojan Source characters & Zero-Width characters
@@ -332,44 +332,48 @@ def check_forbidden_reflection(
 
 def extract_test_assertion_literals(
     workspace_root: Path,
+    *,
+    test_paths: Sequence[Path] | None = None,
 ) -> frozenset[str | int | float]:
     """Collect non-trivial literals from Assert and parametrize nodes in test files."""
     seen: set[Path] = set()
     literals: set[str | int | float] = set()
 
-    for pattern in ("test_*.py", "*_test.py"):
-        for p in workspace_root.rglob(pattern):
-            if p in seen or not p.is_file():
-                continue
-            seen.add(p)
-            try:
-                src = p.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            try:
-                tree = ast.parse(src, filename=str(p))
-            except SyntaxError:
-                continue
+    paths: Iterable[Path] = test_paths if test_paths is not None else (
+        path for pattern in ("test_*.py", "*_test.py") for path in workspace_root.rglob(pattern)
+    )
+    for p in paths:
+        if p in seen or not p.is_file():
+            continue
+        seen.add(p)
+        try:
+            src = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(src, filename=str(p))
+        except SyntaxError:
+            continue
 
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assert):
-                    for sub in ast.walk(node.test):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assert):
+                for sub in ast.walk(node.test):
+                    if isinstance(sub, ast.Constant):
+                        v = sub.value
+                        if isinstance(v, (str, int, float)) and _is_nontrivial_constant(v):
+                            literals.add(v)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                is_param = (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "parametrize"
+                )
+                if is_param:
+                    for sub in ast.walk(node):
                         if isinstance(sub, ast.Constant):
                             v = sub.value
                             if isinstance(v, (str, int, float)) and _is_nontrivial_constant(v):
                                 literals.add(v)
-                elif isinstance(node, ast.Call):
-                    func = node.func
-                    is_param = (
-                        isinstance(func, ast.Attribute)
-                        and func.attr == "parametrize"
-                    )
-                    if is_param:
-                        for sub in ast.walk(node):
-                            if isinstance(sub, ast.Constant):
-                                v = sub.value
-                                if isinstance(v, (str, int, float)) and _is_nontrivial_constant(v):
-                                    literals.add(v)
     return frozenset(literals)
 
 

@@ -1,10 +1,10 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M14 complete; independent review findings resolved and release gates passed.
-- **Previous Milestones:** M0-M13B complete, with live Docker milestone gates passing.
+- **Current Active Milestone:** M15 complete; independent review findings resolved and release gates passed.
+- **Previous Milestones:** M0-M14 complete, with live Docker milestone gates passing.
 - **Release Base:** `56d78e4`; existing history, including `fdfa7cf`, is preserved.
 
-## Executive architecture (M0-M14)
+## Executive architecture (M0-M15)
 
 | Milestone | Capability | Status |
 |---|---|---|
@@ -25,6 +25,83 @@
 | M13A | Post-pass subset search, mutation adequacy and approval-bound evidence | Verified |
 | M13B | Deterministic AST skeletons and tiered localized prompt context | Verified |
 | M14 | Canonical keyed provenance and five-gate offline verification | Verified |
+| M15 | Standalone zero-LLM-cost, read-only CI pull-request gatekeeper | Verified |
+
+## M15 architecture and verification (2026-10-27)
+
+- Public API in `verification.ci_gate`, reexported through verification:
+  `reconstruct_in_memory_source_map`, `run_ci_gate_audit`, JSON/Markdown renderers,
+  lifecycle/severity enums and frozen SourceMapEntry/CIGateViolation/FileAuditMetrics/
+  CIGateReport records. Version 15.0.0; exit constants 0/1/2.
+- `ci_source_map` uses M2 parsing and M9 healing with strict original hunk-count,
+  lifecycle and endpoint checks before reconstruction. Conflicting Git/unified
+  headers fail safely. All reads stay within the base workspace; buffers preserve
+  EOF newline markers, physical LF lines, added-line locations and surviving line_map.
+  Created/deleted files have empty opposite buffers; renames read the old path.
+- `ci_gate_analysis` aggregates all five policy stages, reusing M2 path classifiers,
+  M8 constants/folding/assertion extraction, the unchanged M9 complexity metric and
+  handler outcome analysis, and M11 API models/checks. Repeated hazards use lexical
+  identities, occurrence counts and stable line-map positions for exact new locations.
+- Syntax failures produce SYN-001; new debugger, reflection/dynamic execution,
+  test-literal conditional/dict/return, exception and public-call hazards are errors.
+  Removed classes group their lost methods/constructor into one class diagnostic.
+  Broad handlers may use recognized logging under M15; bare handlers remain errors.
+- File and function complexity growth above +10 warns by default. --strict-warnings
+  changes the verdict/exit without changing warning severity; repair guards keep +5.
+  Diagnostics sort by file/line/stage/rule, and metrics include non-Python touched files.
+- Shared `extract_test_assertion_literals` adds optional keyword-only test_paths;
+  old calls keep their behavior. CI supplies a contained list excluding VCS,
+  virtual-environment, cache and vendor trees. Test code is parsed, never executed.
+- CLI: `agentsentinel ci-gate --workspace <base> --diff <file> [--json-out <file>]
+  [--markdown-out <file>] [--strict-warnings] [--max-cc-delta 10]`. JSON goes to stdout.
+  Report outputs must be outside the base workspace and cannot alias the diff or
+  one another. No LLM/container construction, subprocesses, application or source
+  writes occur during audit. Only explicitly requested report artifacts are written.
+- Limits: workspace must be the pre-patch checkout and stable during reads. This
+  is static policy, not behavioral or dynamic API proof; arbitrary assignment/
+  runtime aliases are outside the model. Literal matching is conservative. Git
+  C-quoted paths are unsupported and fail with usage code 2. Frozen records retain
+  the specified dict-valued fields; nested dictionaries are not deeply immutable.
+- Relevant M6/M8/M9/M11 baseline: **108 passed**. Reconstruction tests first failed
+  with the missing module, then **25 passed**, including unchanged byte snapshots.
+  Staged audit/legacy guard verification: **147 passed**. Seven CLI tests failed
+  before wiring, then **203 focused tests passed**. Conflicting endpoint and
+  non-text input regressions were observed failing and fixed; **209 focused tests
+  passed** afterward. Ruff clean; strict mypy clean across **46 source files**.
+- A representative 40-function audit test verifies elapsed/report time <500ms.
+  No universal runtime guarantee is claimed for unbounded inputs or repositories.
+- Pre-review full suite: **947 passed, 1 Windows symlink skip**, all **10 live Docker
+  tests passed**, in **93.03 seconds**. One independent whole-feature review found
+  Windows path aliases bypassing checks, retroactive import-alias binding, missing
+  parser-level usage JSON and occupied rename destinations losing their preimage.
+- All four findings were reproduced and fixed. Extra regressions cover physical
+  endpoint duplication, Windows trailing-dot/space/stream aliases, valid rename
+  chains/case-only renames, unchanged calls before rebinding, parser help behavior
+  and actual post-line API diagnostics. **225 focused tests passed** afterward;
+  Ruff and strict mypy remain clean. No review findings are deferred.
+- Windows path policy/language and allowlist matching follow filesystem case rules;
+  ambiguous Win32 trailing-dot/space/stream names are rejected. Endpoint uniqueness
+  uses resolved filesystem identity. Rename destinations must be absent, the same
+  file for a case-only rename, or vacated by another fully audited diff section.
+  Parser-level ci-gate errors now emit usage JSON; other commands/help keep their
+  existing parser behavior. Import binding order is respected within lexical scopes.
+- Final full suite after all fixes: **972 passed, 1 skipped, 0 failures** in
+  **86.33 seconds**. All **10 live Docker integration tests** and **126 M15 tests**
+  passed. The sole skip is the existing unprivileged Windows symlink test.
+  Ruff is clean; strict mypy checks **46 source files** without errors.
+- Post-review full suite before the final file-kind boundary checks: **963 passed,
+  1 skipped**, all **10 live Docker tests passed**, in **86.27 seconds**.
+- Final readiness checks reject nonregular modes in both explicit and index
+  metadata, plus nonregular preimages, before treating data as source. Nine
+  file-kind regressions were observed failing across two steps and then passed.
+  **234 focused tests passed** with Ruff clean and strict mypy clean (46 files).
+  A real CLI strict-warning smoke check returned exit 1 and valid JSON, reporting
+  4.60ms for its CC 3-to-15 fixture; the separate 40-function <500ms test also passes.
+- Release verification used the existing virtual environment with `-B`, no pytest
+  cache provider and a fresh external workspace-owned basetemp, preserving the
+  pre-existing `.pytest_tmp`. Log: `m15-release-tests.log` in the parent workspace.
+  Release base: `ddfb665`; publication target: `origin/main` via normal push.
+  Pre-existing primary AGENTS.md/cache edits are excluded; no old assertions changed.
 
 ## M14 architecture and verification (2026-10-27)
 

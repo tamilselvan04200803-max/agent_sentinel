@@ -1,5 +1,23 @@
 """Verification package for anti-overfitting guards."""
 
+from __future__ import annotations
+
+from agentsentinel.verification.ci_gate import (
+    CI_GATE_FAILED,
+    CI_GATE_PASSED,
+    CI_GATE_USAGE_ERROR,
+    CIGateReport,
+    CIGateUsageError,
+    CIGateViolation,
+    FileAuditMetrics,
+    FileLifecycleStatus,
+    SourceMapEntry,
+    ViolationSeverity,
+    reconstruct_in_memory_source_map,
+    render_ci_gate_json,
+    render_ci_gate_markdown,
+    run_ci_gate_audit,
+)
 from agentsentinel.verification.differential_mutation import (
     DifferentialPatchMutant,
     generate_differential_patch_mutants,
@@ -28,6 +46,10 @@ from agentsentinel.verification.post_pass_gate import (
 )
 
 __all__ = [
+    "CI_GATE_FAILED", "CI_GATE_PASSED", "CI_GATE_USAGE_ERROR", "CIGateReport",
+    "CIGateUsageError", "CIGateViolation", "FileAuditMetrics", "FileLifecycleStatus",
+    "SourceMapEntry", "ViolationSeverity", "reconstruct_in_memory_source_map",
+    "render_ci_gate_json", "render_ci_gate_markdown", "run_ci_gate_audit",
     "DifferentialPatchMutant",
     "PatchMutant",
     "check_ast_bloat_and_debug_residue",

@@ -19,6 +19,12 @@ from agentsentinel.llm.client import GeminiClient, LLMClient, OpenAICompatibleCl
 from agentsentinel.orchestrator.checkpoint import CheckpointStore, RunState, TerminationReason
 from agentsentinel.orchestrator.state_machine import RepairStateMachine
 from agentsentinel.sandbox.container import ContainerConfig, HardenedContainerRunner
+from agentsentinel.verification.ci_gate import (
+    render_ci_gate_json,
+    render_ci_gate_markdown,
+    run_ci_gate_audit,
+    usage_error_report,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -256,6 +262,46 @@ def _cmd_verify_bundle(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def _cmd_ci_gate(args: argparse.Namespace) -> int:
+    """Audit a base checkout without invoking repair, sandbox or provider clients."""
+    try:
+        workspace = Path(args.workspace).resolve()
+        diff_path = Path(args.diff).resolve()
+        outputs = [Path(value) for value in (args.json_out, args.markdown_out) if value]
+        resolved = [path.resolve() for path in outputs]
+        if len(set(resolved)) != len(resolved):
+            raise ValueError("JSON and Markdown outputs must be different files")
+        for path, target in zip(outputs, resolved, strict=True):
+            if (
+                path.is_symlink() or target.is_relative_to(workspace) or target == diff_path
+                or (path.exists() and path.stat().st_nlink > 1)
+            ):
+                raise ValueError(
+                    "Report output must be outside the workspace and separate from input"
+                )
+        raw_diff = diff_path.read_bytes().decode("utf-8")
+        report = run_ci_gate_audit(
+            raw_diff, workspace, strict_warnings=args.strict_warnings,
+            max_cc_delta=args.max_cc_delta,
+        )
+        if args.json_out:
+            target = Path(args.json_out)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_ci_gate_json(report), encoding="utf-8", newline="\n")
+        if args.markdown_out:
+            target = Path(args.markdown_out)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_ci_gate_markdown(report), encoding="utf-8", newline="\n")
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        message = (
+            str(exc) if isinstance(exc, ValueError) and not isinstance(exc, UnicodeError)
+            else "Diff input or report output is missing, unreadable or invalid"
+        )
+        report = usage_error_report(message)
+    print(render_ci_gate_json(report))
+    return report.exit_code
+
+
 def _cmd_benchmark(args: argparse.Namespace) -> int:
     suite_dir = Path(args.suite_dir)
     out_dir = Path(args.output_dir)
@@ -350,6 +396,15 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--signing-key", default=None)
     pv.set_defaults(func=_cmd_verify_bundle)
 
+    pc = sub.add_parser("ci-gate", help="Audit a pull-request diff offline without changing source")
+    pc.add_argument("--workspace", required=True)
+    pc.add_argument("--diff", required=True)
+    pc.add_argument("--json-out", default=None)
+    pc.add_argument("--markdown-out", default=None)
+    pc.add_argument("--strict-warnings", action="store_true")
+    pc.add_argument("--max-cc-delta", type=int, default=10)
+    pc.set_defaults(func=_cmd_ci_gate)
+
     pb = sub.add_parser("benchmark", help="Run an M5 benchmark suite")
     pb.add_argument("--suite-dir", required=True)
     pb.add_argument("--output-dir", required=True)
@@ -364,7 +419,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+    try:
+        args = parser.parse_args(arguments)
+    except SystemExit as exc:
+        if arguments and arguments[0] == "ci-gate" and exc.code == 2:
+            print(render_ci_gate_json(usage_error_report("Invalid or missing ci-gate arguments")))
+            return 2
+        raise
     return int(args.func(args))
 
 
