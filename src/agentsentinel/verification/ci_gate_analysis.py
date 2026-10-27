@@ -30,6 +30,13 @@ from agentsentinel.verification.patch_minimizer import (
     _block_outcomes,
     compute_cyclomatic_complexity,
 )
+from agentsentinel.verification.second_order_guard import (
+    ERR_M13C_ABRUPT_FINALLY_EXIT,
+    ERR_M13C_CONTEXT_SUPPRESSION,
+    ERR_M13C_INDIRECT_REFLECTION,
+    ERR_M13C_OBFUSCATED_LITERAL,
+    analyze_second_order_evasion,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -275,6 +282,7 @@ def analyze_entry(
     allowed_edit_paths: Sequence[str] | None,
     allow_test_edits: bool,
     max_cc_delta: int,
+    allow_numeric_module_constants: bool = True,
 ) -> tuple[list[CIGateViolation], FileAuditMetrics]:
     violations: list[CIGateViolation] = []
 
@@ -445,6 +453,27 @@ def analyze_entry(
                     "Implement general behavior instead of embedding test assertion values",
                     STAGE_OVERFIT,
                 )
+
+    for finding in analyze_second_order_evasion(
+        entry.file_path, entry.pre_buffer, entry.post_buffer, literals,
+        allow_numeric_module_constants=allow_numeric_module_constants,
+    ):
+        rule = {
+            ERR_M13C_INDIRECT_REFLECTION: "REF-001",
+            ERR_M13C_OBFUSCATED_LITERAL: "OVF-001",
+            ERR_M13C_ABRUPT_FINALLY_EXIT: "EXC-001",
+            ERR_M13C_CONTEXT_SUPPRESSION: "EXC-001",
+        }.get(finding.code, "IMP-001")
+        if any(
+            item.rule_id == rule and item.line_number == finding.line_number
+            for item in violations
+        ):
+            continue
+        add(
+            rule, finding.line_number, f"{finding.code}: {finding.message}",
+            "Remove the new evasion construct and implement general source behavior",
+            STAGE_EXCEPTION if rule == "EXC-001" else STAGE_OVERFIT,
+        )
 
     cc_pre = (
         compute_cyclomatic_complexity(pre_tree) if pre_tree is not None and entry.pre_buffer else 0

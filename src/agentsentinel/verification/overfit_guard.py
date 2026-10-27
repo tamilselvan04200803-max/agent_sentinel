@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from agentsentinel.domain.exceptions import OverfitPolicyError
 from agentsentinel.verification.contract_guard import verify_public_api_compatibility
 from agentsentinel.verification.patch_minimizer import check_ast_bloat_and_debug_residue
+from agentsentinel.verification.second_order_guard import verify_second_order_evasion
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -412,6 +413,7 @@ def verify_not_overfitted(
     raw_diff: str = "",
     *,
     enforce_api_contract: bool = True,
+    allow_numeric_module_constants: bool = True,
 ) -> None:
     """Raise OverfitPolicyError if post-patch violates anti-overfitting rules.
 
@@ -421,7 +423,6 @@ def verify_not_overfitted(
     3. New conditional branches or dictionary tables comparing against folded test literals.
     """
     check_patch_hygiene(raw_diff, post_patch_sources, pre_patch_sources)
-    check_forbidden_reflection(pre_patch_sources, post_patch_sources)
 
     literals: frozenset[str | int | float]
     if test_literals is None:
@@ -435,7 +436,10 @@ def verify_not_overfitted(
         pre_src = pre_patch_sources.get(file_path, "")
         post_src = post_patch_sources.get(file_path, "")
 
-        check_ast_bloat_and_debug_residue(file_path, pre_src, post_src)
+        check_ast_bloat_and_debug_residue(
+            file_path, pre_src, post_src,
+            allow_numeric_module_constants=allow_numeric_module_constants,
+        )
         if enforce_api_contract:
             verify_public_api_compatibility(file_path, pre_src, post_src)
 
@@ -530,3 +534,9 @@ def verify_not_overfitted(
                                 leaked_literal=str(val),
                                 file_path=file_path,
                             )
+
+        verify_second_order_evasion(
+            file_path, pre_src, post_src, literals, check_structural=False,
+        )
+
+    check_forbidden_reflection(pre_patch_sources, post_patch_sources)

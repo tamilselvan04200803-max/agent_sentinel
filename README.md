@@ -57,6 +57,7 @@ CaseSpec
 | M12 | Typed failure taxonomy and sanitized per-run retry feedback | Complete |
 | M13A | Live post-pass subset minimization and mutation adequacy evidence | Complete |
 | M13B | Line-accurate AST skeletonization and tiered prompt context | Complete |
+| M13C | Differential second-order AST evasion guards and symbolic de-obfuscation | Complete |
 | M14 | Canonical JCS/DSSE PAE provenance and optional HMAC offline verification | Complete |
 | M15 | Standalone read-only PR audit with complete staged diagnostics | Complete |
 
@@ -138,6 +139,33 @@ approval binding. Original proposal/result records are retained for audit.
 Runs created before M13A retain their export behavior and database schema.
 Large mutant payloads travel through a disposable JSON control file to stay
 within Windows command limits. Control files are excluded from the test shadow.
+
+### M13C second-order AST policy
+
+`verification.second_order_guard` exposes `analyze_second_order_evasion()` for
+aggregated findings and `verify_second_order_evasion()` for typed enforcement.
+`fold_symbolic_constant()` supports bounded character synthesis, bytes/hex/base64,
+fixed codecs, slicing, string chains and deterministic digests without importing
+or executing inspected source. Reflection aliases, module-table access, match
+guards, escaping finally exits, broad suppression and definition-time execution
+are checked by lexical scope and occurrence against the baseline.
+
+Repair attempts run these checks before Docker; CI includes them in stages 3/4.
+Five `ERR_M13C_*` codes survive retry feedback with fixed corrective guidance.
+`get_second_order_evasion_metrics()` returns a frozen process-local detection
+snapshot; `reset_second_order_evasion_metrics()` resets it.
+
+The standalone analyzer rejects new module assignments by default. Existing
+repair/CI APIs retain a narrow numeric-constant compatibility exemption required
+by legacy M13A/M15 callers; pass `allow_numeric_module_constants=False` to those
+guard/audit APIs for strict assignment rejection. Boolean/string overrides,
+attribute/subscript writes and import-time calls remain rejected. Existing
+hazards are grandfathered differentially. This is a bounded static policy, not
+proof of semantic purity, universal detection or zero false positives. Folding
+limits are 48 nested evaluations, 4,096 operations, 256 comprehension iterations,
+1,024 repetitions and 65,536 materialized characters/bytes per value. Unordered
+multi-element sets and randomized `hash()` values are not evaluated; hash
+comparisons are identified structurally. Latency targets apply to test fixtures.
 
 ### M15 standalone CI gate
 

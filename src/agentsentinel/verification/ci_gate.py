@@ -132,6 +132,7 @@ def run_ci_gate_audit(
     allow_test_edits: bool = False,
     max_cc_delta: int = 10,
     strict_warnings: bool = False,
+    allow_numeric_module_constants: bool = True,
 ) -> CIGateReport:
     started = perf_counter()
     try:
@@ -151,6 +152,7 @@ def run_ci_gate_audit(
                 allowed_edit_paths=allowed_edit_paths,
                 allow_test_edits=allow_test_edits,
                 max_cc_delta=max_cc_delta,
+                allow_numeric_module_constants=allow_numeric_module_constants,
             )
             violations.extend(findings)
             metrics.append(file_metrics)

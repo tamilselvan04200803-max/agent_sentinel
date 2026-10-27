@@ -1,6 +1,6 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M15 complete; independent review findings resolved and release gates passed.
+- **Current Active Milestone:** M13C implemented; R&D gap integration and final release verification in progress.
 - **Previous Milestones:** M0-M14 complete, with live Docker milestone gates passing.
 - **Release Base:** `56d78e4`; existing history, including `fdfa7cf`, is preserved.
 
@@ -24,6 +24,7 @@
 | M12 | Typed diagnostics and sanitized per-run retry feedback | Verified |
 | M13A | Post-pass subset search, mutation adequacy and approval-bound evidence | Verified |
 | M13B | Deterministic AST skeletons and tiered localized prompt context | Verified |
+| M13C | Second-order AST evasion, symbolic decoding and structured retry codes | Implemented |
 | M14 | Canonical keyed provenance and five-gate offline verification | Verified |
 | M15 | Standalone zero-LLM-cost, read-only CI pull-request gatekeeper | Verified |
 

@@ -66,6 +66,21 @@ _EXCEPTION_LINE = re.compile(
     r"^(?:E\s+)?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?::|$)", re.MULTILINE,
 )
 _SUMMARY_LINE = re.compile(r"^(?:FAILED|ERROR)\s+.+?\s+-\s+([\w.]+)(?::|$)", re.MULTILINE)
+_M13C_DIRECTIVES = {
+    "ERR_M13C_INDIRECT_REFLECTION": "Remove indirect reflection and restricted namespace access.",
+    "ERR_M13C_OBFUSCATED_LITERAL": (
+        "Derive results from input instead of encoded constants or digest comparisons."
+    ),
+    "ERR_M13C_ABRUPT_FINALLY_EXIT": (
+        "Move escaping control flow out of finally suites so exceptions propagate."
+    ),
+    "ERR_M13C_CONTEXT_SUPPRESSION": (
+        "Handle specific exceptions explicitly and preserve unexpected failures."
+    ),
+    "ERR_M13C_TOPLEVEL_SIDEEFFECT": (
+        "Keep import-time state and definition expressions free of new side effects."
+    ),
+}
 
 
 def classify_attempt_failure(
@@ -108,4 +123,8 @@ def classify_attempt_failure(
             category = FailureCategory.RUNTIME_EXCEPTION_OR_IMPORT_ERROR
         elif "AssertionError" in names:
             category = FailureCategory.TEST_ASSERTION_VALUE_MISMATCH
+    if isinstance(error, OverfitPolicyError) and error.diagnostic_code in _M13C_DIRECTIVES:
+        code = error.diagnostic_code
+        assert code is not None
+        return category, f"{code}: {_M13C_DIRECTIVES[code]}"
     return category, _DIRECTIVES[category]

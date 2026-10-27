@@ -44,8 +44,28 @@ from agentsentinel.verification.post_pass_gate import (
     run_ddmin_hunk_minimization,
     run_mutation_adequacy_probe,
 )
+from agentsentinel.verification.second_order_guard import (
+    ERR_M13C_ABRUPT_FINALLY_EXIT,
+    ERR_M13C_CONTEXT_SUPPRESSION,
+    ERR_M13C_INDIRECT_REFLECTION,
+    ERR_M13C_OBFUSCATED_LITERAL,
+    ERR_M13C_TOPLEVEL_SIDEEFFECT,
+    SecondOrderEvasionMetrics,
+    SecondOrderFinding,
+    analyze_second_order_evasion,
+    get_second_order_evasion_metrics,
+    reset_second_order_evasion_metrics,
+    verify_second_order_evasion,
+)
+from agentsentinel.verification.symbolic_constants import fold_symbolic_constant
 
 __all__ = [
+    "ERR_M13C_ABRUPT_FINALLY_EXIT", "ERR_M13C_CONTEXT_SUPPRESSION",
+    "ERR_M13C_INDIRECT_REFLECTION", "ERR_M13C_OBFUSCATED_LITERAL",
+    "ERR_M13C_TOPLEVEL_SIDEEFFECT", "SecondOrderEvasionMetrics", "SecondOrderFinding",
+    "analyze_second_order_evasion", "fold_symbolic_constant",
+    "get_second_order_evasion_metrics", "reset_second_order_evasion_metrics",
+    "verify_second_order_evasion",
     "CI_GATE_FAILED", "CI_GATE_PASSED", "CI_GATE_USAGE_ERROR", "CIGateReport",
     "CIGateUsageError", "CIGateViolation", "FileAuditMetrics", "FileLifecycleStatus",
     "SourceMapEntry", "ViolationSeverity", "reconstruct_in_memory_source_map",

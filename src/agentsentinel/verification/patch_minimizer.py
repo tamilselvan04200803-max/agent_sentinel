@@ -17,6 +17,7 @@ import re
 from collections import Counter
 
 from agentsentinel.domain.exceptions import OverfitPolicyError
+from agentsentinel.verification.second_order_guard import verify_second_order_evasion
 
 
 def compute_cyclomatic_complexity(tree: ast.AST) -> int:
@@ -196,6 +197,8 @@ def check_ast_bloat_and_debug_residue(
     pre_source: str,
     post_source: str,
     max_cc_delta: int = 5,
+    *,
+    allow_numeric_module_constants: bool = True,
 ) -> None:
     """Raise ``OverfitPolicyError`` if ``post_source`` leaks debug residue or
     inflates cyclomatic complexity beyond ``max_cc_delta``.
@@ -242,6 +245,11 @@ def check_ast_bloat_and_debug_residue(
                 f"exceeds max_cc_delta={max_cc_delta}"
             ),
         )
+
+    verify_second_order_evasion(
+        file_path, pre_source, post_source,
+        allow_numeric_module_constants=allow_numeric_module_constants,
+    )
 
 
 def _split_diff_sections(raw_diff: str) -> list[list[str]]:

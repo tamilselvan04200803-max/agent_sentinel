@@ -212,10 +212,12 @@ class OverfitPolicyError(PatchPolicyError):
         message: str = "",
         *,
         reason_code: OverfitReason = "overfit",
+        diagnostic_code: str | None = None,
     ) -> None:
         self.leaked_literal = leaked_literal
         self.file_path = file_path
         self.reason_code = reason_code
+        self.diagnostic_code = diagnostic_code
         if message:
             super().__init__(message)
         elif leaked_literal or file_path:
