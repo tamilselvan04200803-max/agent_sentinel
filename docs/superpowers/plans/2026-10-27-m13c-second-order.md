@@ -29,13 +29,13 @@
 
 ## Tasks
 
-1. [ ] Add unit/adversarial RED tests for ADV-01 through ADV-12, positive controls, differential scope/alias handling, safe bounds, telemetry and representative timing.
-2. [ ] Add `symbolic_constants.py`: `fold_symbolic_constant(node)` and bounded internal folder for composition, comprehensions, codecs, slicing and digests.
-3. [ ] Add `second_order_guard.py`: frozen findings/metrics, snapshot/reset, differential scope-aware analysis and typed enforcement. Support literal-independent structural checks.
-4. [ ] Integrate `patch_minimizer.py`, `overfit_guard.py`, `domain/exceptions.py`, `failure_taxonomy.py`, `verification/__init__.py`, and `ci_gate_analysis.py`. Add retry/no-Docker and CI aggregation tests to new M13C tests.
-5. [ ] Run focused legacy/new tests, Ruff and strict mypy; run full suite and reproduce/adapt any legacy conflicts without changing old assertions.
-6. [ ] Audit M13A/B/14/15 against master directive. Implement useful gaps with RED/GREEN tests, document invalid guarantees and incompatibilities rather than claiming them.
-7. [ ] Update README/STATE with actual evidence and limitations. Run final full suite/live Docker checks, one read-only review, resolve findings, conventionally commit and normally push to origin/main.
+1. [x] Add unit/adversarial RED tests for ADV-01 through ADV-12, positive controls, differential scope/alias handling, safe bounds, telemetry and representative timing.
+2. [x] Add `symbolic_constants.py`: `fold_symbolic_constant(node)` and bounded internal folder for composition, comprehensions, codecs, slicing and digests.
+3. [x] Add `second_order_guard.py`: frozen findings/metrics, snapshot/reset, differential scope-aware analysis and typed enforcement. Support literal-independent structural checks.
+4. [x] Integrate `patch_minimizer.py`, `overfit_guard.py`, `domain/exceptions.py`, `failure_taxonomy.py`, `verification/__init__.py`, and `ci_gate_analysis.py`. Add retry/no-Docker and CI aggregation tests to new M13C tests.
+5. [x] Run focused legacy/new tests, Ruff and strict mypy; run full suite and reproduce/adapt any legacy conflicts without changing old assertions.
+6. [x] Audit M13A/B/14/15 against master directive. Implement useful gaps with RED/GREEN tests, document invalid guarantees and incompatibilities rather than claiming them.
+7. [x] Update README/STATE with actual evidence and limitations. Run final full suite/live Docker checks, one read-only review, resolve findings, conventionally commit and normally push to origin/main.
 
 ## Evidence ledger
 
@@ -45,3 +45,9 @@
 - M13C initial full gate: 1,066 passed, one Windows symlink skip, all 10 live Docker tests passed (95.95s). Docker Desktop was started and the existing runner image rebuilt successfully.
 - After four additional definition-time/empty-handler boundaries: 217 focused M13C/M9/M11/M12 checks passed; Ruff clean and strict mypy clean across 48 source files. Final integrated full gate remains pending.
 - R&D gap scout is read-only and independent of implementation.
+- Integrated R&D initial full gate: 1,150 passed, one Windows symlink skip, all 12 live Docker cases passed (123.73s).
+- Final review RED: eight cases covering eager annotations, legacy diagnostic metadata and resolved digest alias changes. Fixes retain legacy literal properties/error details, while remediation directives remain fixed.
+- Detached-session child contamination reproduced live (second mutant incorrectly killed); Linux subreaper descendant discovery/kill/reap fixed it. Live regression passed in 7.32s; 213 focused legacy/new tests passed after all four fixes.
+- Deferred adaptations and exact constraints are recorded in STATE.md. No universal minimum, compression, latency or detection guarantee is asserted.
+- Optional worker temporary-cache deletion was automatically rejected with only "blocked by policy" as reason. The generated directories remain in isolated worker worktrees; no user caches were removed.
+- Final release gate after all fixes: 1,160 passed, one Windows symlink skip, all 13 live Docker tests passed (128.05s). Ruff clean; strict mypy clean across 49 source files. Source/review-fix commit e9e8e71; original test files/bytecode/user changes preserved. Final remote publication is verified through Git refs after normal push.

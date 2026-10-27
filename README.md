@@ -119,6 +119,13 @@ candidate is selected, with every expected test ID required to pass. This is a
 single-pass search and does not establish global minimum or ddmin 1-minimality.
 `codeslop_hunks_removed` counts removed hunks; it does not prove they were dead code.
 
+Opt into repeated reductions with `enable_iterative_ddmin=True` on the state
+machine (alongside minimization), or `run_ddmin_hunk_minimization(..., iterative=True)`.
+Each accepted reduction strictly decreases the hunk count. Exhausting nonempty
+one-hunk deletions establishes only 1-minimality relative to the deterministic
+test/policy/application oracle. It does not prove global optimality or that every
+statement/operator inside a retained hunk is exercised.
+
 Mutation probing uses only the selected patch and a fresh container per mutant.
 The read-only `/workspace` is copied into `/tmp/mut_workspace`; pytest runs with
 `-x --tb=no -q` and a child timeout of `max(1.0, 2 * accepted_result.wall_seconds)`.
@@ -126,6 +133,20 @@ Child processes are reaped and the shadow tree is removed between mutants.
 Shadow copying remains subject to the runner's existing `/tmp` quota.
 Test nonzero exits and timeouts count as kills. Wrapper setup errors remain
 infrastructure failures. Zero mutants yield score `1.0` and no warning.
+
+For actual batching, enable `enable_single_container_mutation_batch=True`
+alongside mutation probing, or call the probe with `single_container_batch=True`.
+`run_in_container_mutation_batch_detailed()` returns ordered frozen
+`MutantExecutionResult` records with stable IDs, `SURVIVED`/`KILLED`/
+`KILLED_BY_TIMEOUT`, exit codes and child runtime. One Docker invocation evaluates
+the batch with a fresh shadow tree per mutant. V2 rejects incomplete/duplicate
+reports and pytest setup/collection/usage failures; an outer container timeout
+is infrastructure failure and cannot create kills for unexecuted mutants.
+Detached descendants are killed and reaped before the next mutant, even after
+changing sessions. The runner's outer timeout and tmpfs quotas remain fixed, so
+keep batches small. Legacy singleton behavior remains the default. Timeout
+scaling still uses the accepted result's Docker-inclusive wall time; it is not
+a pure pytest benchmark.
 
 When every evaluated mutant survives, `low_mutation_adequacy=True` requires human
 approval, including benchmark runs configured for auto-approval. This warning
@@ -140,6 +161,27 @@ Runs created before M13A retain their export behavior and database schema.
 Large mutant payloads travel through a disposable JSON control file to stay
 within Windows command limits. Control files are excluded from the test shadow.
 
+### M13B bounded context and measured telemetry
+
+The legacy character packer is retained. The additive
+`pack_file_with_token_budget(source, slices, budget, count_tokens=counter)` uses
+the caller's deterministic tokenizer counter and returns a frozen
+`TokenBudgetPackResult`. It evicts hop-1 bodies before hop-0 bodies, then uses
+interfaces only. If these still exceed the budget, it returns a complete
+omission marker or empty text, with explicit loss metadata. It never truncates
+a source line or signature. Python physical-line splitting preserves coordinates
+even when Unicode separators appear inside strings.
+
+`SkeletonTelemetry` records actual emitted-coordinate divergence, input/output
+token counts, compression, syntax fallback counts and measured elapsed time.
+No patch-success rate is invented before an application outcome exists.
+`PromptBuilder(..., max_file_tokens=budget, count_tokens=counter)` optionally
+bounds each sanitized Python source body; prompt wrappers, evidence, metadata
+and non-Python files are outside that per-file bound. This requires a trusted
+counter for the consumer's tokenizer; no tokenization dependency was added.
+Neither 80% compression on every file nor a universal latency bound is possible
+when interfaces/selected content dominate.
+
 ### M13C second-order AST policy
 
 `verification.second_order_guard` exposes `analyze_second_order_evasion()` for
@@ -149,6 +191,7 @@ fixed codecs, slicing, string chains and deterministic digests without importing
 or executing inspected source. Reflection aliases, module-table access, match
 guards, escaping finally exits, broad suppression and definition-time execution
 are checked by lexical scope and occurrence against the baseline.
+Eager annotation calls are audited; postponed annotations retain lazy behavior.
 
 Repair attempts run these checks before Docker; CI includes them in stages 3/4.
 Five `ERR_M13C_*` codes survive retry feedback with fixed corrective guidance.
@@ -168,6 +211,13 @@ multi-element sets and randomized `hash()` values are not evaluated; hash
 comparisons are identified structurally. Latency targets apply to test fixtures.
 
 ### M15 standalone CI gate
+
+Usage failures return `status="USAGE_ERROR"`, exit 2. CI fails closed when a
+discovered test file cannot be decoded or parsed for assertion analysis; the
+legacy assertion collector retains soft failure unless `strict=True` is supplied.
+Offline verification accepts both `verify-bundle <bundle_dir>` and the legacy
+`--bundle-dir` form, and emits derived `EVENT_G1_FAILED` through `EVENT_G5_FAILED`
+telemetry without changing signed payloads.
 
 ```powershell
 agentsentinel ci-gate --workspace C:\checkouts\base --diff C:\ci\change.diff --json-out C:\ci\audit.json --markdown-out C:\ci\summary.md
@@ -390,13 +440,14 @@ LLM calls, tokens, and latency.
 ```
 
 Verified on 2026-10-27 with Python 3.13.7 and live Docker Desktop:
-**972 passed, 1 skipped** in **86.33 seconds**, all ten live Docker tests passed,
-Ruff clean, and strict mypy clean across 46 source files. The skip is the expected
+**1,160 passed, 1 skipped** in **128.05 seconds**, all 13 live Docker tests passed,
+Ruff clean, and strict mypy clean across 49 source files. The skip is the expected
 unprivileged Windows symlink test. The release run disabled pytest's cache and
 used a dedicated `--basetemp` directory to avoid Windows permission conflicts.
 The final independent review findings were reproduced and fixed before this run.
-All 126 M15 tests pass, including the representative <500ms audit SLA and
-workspace byte-preservation tests. See STATE.md for release evidence and limits.
+The suite includes all 12 named M13C adversarial scenarios, positive controls,
+bounded context, iterative minimization, batch isolation and legacy M15 tests.
+See STATE.md for release evidence, compatibility adaptations and deferred fields.
 
 ## Honest limitations
 

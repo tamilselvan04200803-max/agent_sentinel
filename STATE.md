@@ -1,8 +1,8 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M13C implemented; R&D gap integration and final release verification in progress.
-- **Previous Milestones:** M0-M14 complete, with live Docker milestone gates passing.
-- **Release Base:** `56d78e4`; existing history, including `fdfa7cf`, is preserved.
+- **Current Active Milestone:** M13C and useful M13A/M13B/M14/M15 R&D gaps complete; reviewed and verified.
+- **Previous Milestones:** M0-M15 complete, with live Docker milestone gates passing.
+- **Release Base:** `c1e0149`; existing history, including `fdfa7cf`, is preserved.
 
 ## Executive architecture (M0-M15)
 
@@ -24,9 +24,70 @@
 | M12 | Typed diagnostics and sanitized per-run retry feedback | Verified |
 | M13A | Post-pass subset search, mutation adequacy and approval-bound evidence | Verified |
 | M13B | Deterministic AST skeletons and tiered localized prompt context | Verified |
-| M13C | Second-order AST evasion, symbolic decoding and structured retry codes | Implemented |
+| M13C | Second-order AST evasion, symbolic decoding and structured retry codes | Verified |
 | M14 | Canonical keyed provenance and five-gate offline verification | Verified |
 | M15 | Standalone zero-LLM-cost, read-only CI pull-request gatekeeper | Verified |
+
+## M13C and R&D integration (2026-10-27)
+
+- M13C code commit `4d61ec1`: scoped differential reflection/module-table checks,
+  bounded symbolic folder, digest-branch detection, compound finally exits,
+  broad/empty suppression, module/class/default/decorator execution checks.
+  Five fixed diagnostic codes are carried as typed exception metadata into
+  sanitized retry feedback. CI aggregates findings without executing source.
+- Frozen detection snapshots/reset are process-local, not a persistent audit
+  ledger. Limits bound folding work/materialization; this is a static policy,
+  not a proof against arbitrary Python behavior or dynamic aliasing.
+- Compatibility: blanket assignment rejection reproduced nine existing failures.
+  Existing repair/CI callers retain only simple int/float assignment allowance
+  (not bool); callers can set `allow_numeric_module_constants=False`. Standalone
+  second-order APIs remain strict by default. Unchanged baseline hazards and
+  existing literal exemptions retain their established differential semantics.
+- M13A enhancement `ff6b057`: optional iterative nonempty oracle-relative
+  minimization and optional V2 single-container mutation batches with detailed
+  ordered statuses/exit codes/runtimes. Both flags default off. Strict pytest
+  infrastructure handling and outer-timeout propagation prevent fabricated kills.
+  No SQLite, legacy summary dataclass, approval payload or container-limit change.
+- M13B enhancement `55a1eb2`: fixed Unicode-separator physical-line corruption;
+  optional supplied-counter token budget and measured frozen SkeletonTelemetry,
+  including prompt wiring after sanitization. Budgets cover per-file Python
+  source content, not complete prompts. Insufficient interfaces produce honest
+  whole omission; legacy character-based behavior remains intact.
+- M14/M15 fixes `8a7fd25`: positional bundle CLI alias, derived gate failure
+  events, correct CI usage status and strict CI test-oracle reads. Existing
+  signing, keyring, five-gate verification and older API constructors preserved.
+- Explicit adaptations: raw `-k` expressions are not accepted as exact pytest
+  node IDs, because the current evidence contract requires visibly passing
+  expected IDs. A safe selector feature needs collection/selection attestation.
+  Richer persisted `gate_results`/survivor line/operator/cause fields require a
+  versioned payload extension: legacy dataclass-field assertions and approval
+  serialization are immutable here. New detailed runtime evidence is available
+  additively, without silently changing old signed records. Patch-application
+  success telemetry also needs attributed application feedback; context creation
+  alone cannot measure it. No universal compression/latency/correctness claim.
+- Initial integrated gate: 1,150 passed, one Windows symlink skip, all 12 live
+  Docker tests passed (123.73s). New live tests demonstrated five mutants in one
+  hardened container and iterative reduction from five hunks to two. A first
+  live fixture used zero-context hunks rejected by the existing git application
+  policy; adding one context line preserved all five hunks and tested the intended
+  policy/application/oracle path without changing assertions.
+- One independent final review found eager annotation calls, lost diagnostics
+  in legacy M8 folds and digest alias identity changes. Each reproduced RED,
+  then passed with fixes. Its detached-descendant concern reproduced in live
+  Docker: a session-changing child contaminated the next mutant. V2 now kills
+  and reaps all adopted descendants before resetting the shadow tree; the live
+  regression passes. Focused review-fix gate: 213 passed; Ruff/mypy clean (49 files).
+  Final source/review-fix commit: `e9e8e71`.
+- Final release gate: **1,160 passed, 1 skipped, 0 failures in 128.05s**.
+  All **13 live Docker tests** passed (7 original, 3 M13A, 3 R&D); the sole skip
+  is `tests/unit/test_validator.py:93`, Windows unprivileged symlink creation.
+  Ruff: **All checks passed**. Strict mypy: **49 source files, no issues**.
+  The commands ran in separate PowerShell invocations using the existing venv,
+  Python `-B`, worktree `PYTHONPATH`, pytest `-p no:schemathesis -p no:cacheprovider`,
+  and an owned `--basetemp` outside the repository. No old test/assertion,
+  tracked bytecode, user AGENTS.md or existing `.pytest_tmp/` was changed/staged.
+  Auto-review blocked deleting generated worker test directories (only reason:
+  "blocked by policy"); isolated worker/reviewer worktrees/caches are preserved.
 
 ## M15 architecture and verification (2026-10-27)
 
