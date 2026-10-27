@@ -36,6 +36,7 @@ It enforces all 8 specification invariants from the M4 checklist:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
@@ -345,7 +346,9 @@ class RepairStateMachine:
         # The approval_record stored when entering AWAITING_HUMAN_APPROVAL
         # contains the same binding — compare to that.
         stored = (rec.approval_record or {}).get("approval_hash")
-        if stored != expected:
+        if not isinstance(stored, str) or not hmac.compare_digest(
+            stored.encode("utf-8"), expected.encode("utf-8"),
+        ):
             raise ApprovalIntegrityError(
                 f"Approval hash mismatch: expected {expected[:12]}…, stored {str(stored)[:12]}…"
             )

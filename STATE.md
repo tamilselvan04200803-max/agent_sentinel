@@ -1,10 +1,10 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M13B complete; final review findings resolved and release gates passed.
-- **Previous Milestones:** M0-M13A complete, with live Docker milestone gates passing.
+- **Current Active Milestone:** M14 complete; independent review findings resolved and release gates passed.
+- **Previous Milestones:** M0-M13B complete, with live Docker milestone gates passing.
 - **Release Base:** `56d78e4`; existing history, including `fdfa7cf`, is preserved.
 
-## Executive architecture (M0-M13B)
+## Executive architecture (M0-M14)
 
 | Milestone | Capability | Status |
 |---|---|---|
@@ -24,6 +24,76 @@
 | M12 | Typed diagnostics and sanitized per-run retry feedback | Verified |
 | M13A | Post-pass subset search, mutation adequacy and approval-bound evidence | Verified |
 | M13B | Deterministic AST skeletons and tiered localized prompt context | Verified |
+| M14 | Canonical keyed provenance and five-gate offline verification | Verified |
+
+## M14 architecture and verification (2026-10-27)
+
+- `cli.provenance` adds `canonicalize_jcs`, `loads_strict_jcs`, `compute_dsse_pae`,
+  `compute_key_id` and typed key/attestation helpers. RFC 8785 UTF-16 key sorting,
+  Unicode scalar validation and ECMAScript binary64 number spellings are tested
+  against Appendix B vectors. Negative zero emits `0`. The parser additionally
+  rejects duplicate keys, non-finite numbers, integer tokens with abs(value) >=
+  2**53, non-object roots and container nesting beyond 128, before decode recursion.
+- DSSE PAE domain separation distinguishes `agentsentinel.approval.v1` and
+  `agentsentinel.evidence_bundle.v1`. Exported envelopes bind every top-level
+  field except exactly `bundle_hash`, `approval_hash`, and `hmac_signature`.
+- `export_evidence_bundle(..., *, signing_key=None)` retains legacy metadata,
+  writes exact LF-normalized UTF-8 patch bytes and canonical evidence JSON, and
+  binds raw/canonical patch digests, execution-record digests, approval identity,
+  timestamp and M13A summaries. Re-export with the same record/key is deterministic.
+- Explicit signing keys override `AGENTSENTINEL_SIGNING_KEY`; no key selects
+  `sha256-unkeyed-v1`. Configured keys select `hmac-sha256-v1`; key IDs are the
+  first 16 hex characters of SHA-256(key). Secrets never enter the envelope/report.
+  Rotation uses explicit trusted_keys or a JSON object in AGENTSENTINEL_TRUSTED_KEYS;
+  routing also verifies each secret's fingerprint. Digest/signature checks use
+  hmac.compare_digest, including legacy approval comparisons.
+- `cli.bundle_verifier.verify_exported_bundle` returns a frozen
+  `BundleVerificationReport`. Gates fail in order: structure/schema/containment
+  (10), physical/canonical patch (20), canonical formatting/payload (30), PAE/HMAC
+  and key policy (40), execution/status invariants (50). Success returns 0.
+- CLI: `agentsentinel verify-bundle --bundle-dir <path> [--require-keyed]
+  [--signing-key <key>]`. Output is one JSON telemetry record. Verification reads
+  files only: no database, Docker, network, imports of inspected code or test runs.
+  Explicit/environment signing keys enforce keyed verification; REQUIRE_KEYED=1
+  (full variable: AGENTSENTINEL_REQUIRE_KEYED) also prevents unkeyed downgrade.
+- Historical `[Approval-1]` is resolved for exported M14 provenance through
+  RFC 8785 + DSSE PAE + HMAC-SHA256 and the offline verifier. Existing SQLite
+  approval hashes and EvidenceBundle domain hashes retain their legacy format;
+  nested approval_record is signed metadata, not a migrated historical signature.
+  Older export directories lack M14 schema and must be re-exported from their
+  approved database record. No schema migration or approval-call API changes.
+- Limits: unkeyed mode detects accidental corruption but cannot authenticate a
+  producer; HMAC authenticates shared-key possession, not public-key identity or
+  non-repudiation. Keys are operator-managed. The verifier checks declared execution
+  results, not genuine execution. Timestamp skew is warning-only, not expiration
+  or replay prevention. REPORT.md must exist but its independent text is not hashed;
+  authenticated JSON and patch digests are authoritative. Verification assumes
+  stable artifacts during the read; concurrent filesystem writers and resource
+  bounds beyond structural JSON depth are outside this milestone's guarantee.
+- Baseline M4/M6/M13A: **40 passed**. Primitive tests first failed with a missing
+  module, then **57 passed**. Verifier tests first failed with its missing module,
+  then **107 passed**. Integration produced 11 expected missing-feature failures;
+  a Windows junction guard also had a separately reproduced failing test.
+- Integrated M14/M4/M6/M13A: **159 passed** before review fixes; **161 passed**
+  afterward. Ruff: clean. Strict mypy: **43 source files**, no errors.
+- Pre-review full suite: **844 passed, 1 Windows symlink skip** in **195.72 seconds**,
+  including all **10 live Docker tests**. One read-only independent review found
+  malformed Unicode trusted-key configuration escaping Gate 4 telemetry. That
+  finding and an adjacent environment-keyring boundary were reproduced by two
+  failing tests and fixed with bounded schema-error conversion. No findings are
+  deferred. The reviewer also compared **199,921 finite binary64 values** against
+  Node JSON.stringify and reported zero serialization discrepancies.
+- Final suite after fixes: **846 passed, 1 skipped, 0 failures** in **199.12 seconds**.
+  All **10 live Docker integration tests passed** and all **121 M14 tests passed**.
+  The sole skip is the existing Windows `test_block_symlink_escape`, because this
+  user environment lacks symlink creation privileges. No original assertions changed.
+- Verification used the existing virtual environment with `-B`, disabled pytest's
+  cache provider, and a fresh workspace-owned external basetemp to preserve the
+  existing ACL-locked `.pytest_tmp`. Log: `m14-final-tests.log` in the parent workspace.
+  Release base: `ae3a2e4`; publication target: `origin/main` via normal push.
+  Pre-existing primary-checkout AGENTS.md and tracked cache edits are excluded.
+- References: [RFC 8785](https://www.rfc-editor.org/info/rfc8785/) and the
+  [DSSE protocol](https://github.com/secure-systems-lab/dsse/blob/master/protocol.md).
 
 ## M13B architecture and verification (2026-10-27)
 
@@ -147,8 +217,9 @@
 - M11 is a bounded static call-signature check, not a semantic or dynamic API proof.
 - M12 retries consume feedback scoped to the run; transport handling and attempt
   accounting are preserved. Feedback remains process-local; SQLite schemas are unchanged.
-- Approval remains an **unkeyed SHA-256 integrity binding, not HMAC authentication**.
-  Key management, signer authentication and record migration are deferred.
+- Persisted legacy approvals remain **unkeyed SHA-256 integrity bindings**.
+  M14 adds optional HMAC authentication to exported provenance; key custody and
+  historical approval-record migration remain operator/deferred responsibilities.
 
 ## Completed & Verified Components
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
+from agentsentinel.cli.bundle_verifier import verify_exported_bundle
 from agentsentinel.cli.exporter import export_evidence_bundle
 from agentsentinel.domain.models import CaseSpec
 from agentsentinel.evaluation.harness import BenchmarkHarness
@@ -247,6 +248,14 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify_bundle(args: argparse.Namespace) -> int:
+    report = verify_exported_bundle(
+        Path(args.bundle_dir), require_keyed=args.require_keyed, signing_key=args.signing_key,
+    )
+    print(json.dumps(report.to_dict(), sort_keys=True))
+    return report.exit_code
+
+
 def _cmd_benchmark(args: argparse.Namespace) -> int:
     suite_dir = Path(args.suite_dir)
     out_dir = Path(args.output_dir)
@@ -334,6 +343,12 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--output-dir", required=True)
     pe.add_argument("--db", required=True)
     pe.set_defaults(func=_cmd_export)
+
+    pv = sub.add_parser("verify-bundle", help="Verify an exported bundle offline")
+    pv.add_argument("--bundle-dir", required=True)
+    pv.add_argument("--require-keyed", action="store_true")
+    pv.add_argument("--signing-key", default=None)
+    pv.set_defaults(func=_cmd_verify_bundle)
 
     pb = sub.add_parser("benchmark", help="Run an M5 benchmark suite")
     pb.add_argument("--suite-dir", required=True)

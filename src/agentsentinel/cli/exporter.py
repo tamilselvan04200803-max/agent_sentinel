@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from agentsentinel.cli.provenance import attest_payload, canonicalize_jcs
 from agentsentinel.domain.exceptions import UnapprovedExportError
 from agentsentinel.llm.prompts import sanitize_diagnostic
 from agentsentinel.orchestrator.checkpoint import (
@@ -38,11 +39,13 @@ def export_evidence_bundle(
     db_path: Path,
     run_id: str,
     output_dir: Path,
+    *,
+    signing_key: str | bytes | None = None,
 ) -> Path:
     """Export an APPROVED run as a deterministic evidence bundle.
 
     Produces under ``<output_dir>/<run_id>/``:
-      * ``evidence.json`` — canonical JSON (indent=2, sort_keys) with full
+      * ``evidence.json`` — RFC 8785 canonical JSON with full
         metadata, attempts ledger, approval record, and ``bundle_hash``.
       * ``approved.patch`` — exact unified diff (LF newlines).
       * ``REPORT.md`` — human-readable Markdown summary.
@@ -102,6 +105,11 @@ def export_evidence_bundle(
         post_patch_result = (
             passed.execution_result_json if passed is not None else None
         )
+        baseline = rec.baseline_result_json
+        if baseline is None or post_patch_result is None or not approved_diff:
+            raise ValueError("Approved run has no verified patch/result evidence")
+        approved_diff = approved_diff.replace("\r\n", "\n")
+        patch_bytes = approved_diff.encode("utf-8")
         accepted_patch = passed.proposal_json if passed is not None else None
         evidence_bundle: dict[str, Any] = {
             "case_id": rec.case_id,
@@ -138,16 +146,42 @@ def export_evidence_bundle(
             "approved_at_utc": approval.get("approved_at_utc"),
             "approver_id": approval.get("approver_id"),
         }
-        # Deterministic JSON
-        evidence_json = json.dumps(evidence, indent=2, sort_keys=True)
-        bundle_hash = hashlib.sha256(evidence_json.encode("utf-8")).hexdigest()
-        evidence["bundle_hash"] = bundle_hash
-        evidence_json = json.dumps(evidence, indent=2, sort_keys=True)
+        approved_at = str(approval.get("approved_at_utc") or rec.updated_at_utc)
+        approved_dt = datetime.fromisoformat(approved_at.replace("Z", "+00:00"))
+        if approved_dt.tzinfo is None:
+            raise ValueError("Approval timestamp must be timezone aware")
+        evidence.update({
+            "base_commit": (rec.spec_json or {}).get("base_commit") or "0" * 40,
+            "status": rec.state.value,
+            "diff_hash": hashlib.sha256(patch_bytes).hexdigest(),
+            "canonical_diff_sha256": hashlib.sha256(
+                patch_bytes.replace(b"\r\n", b"\n"),
+            ).hexdigest(),
+            "image_digest": approval.get("image_digest") or "sha256:unavailable",
+            "baseline_result_hash": hashlib.sha256(canonicalize_jcs(baseline)).hexdigest(),
+            "post_patch_result_hash": hashlib.sha256(
+                canonicalize_jcs(post_patch_result),
+            ).hexdigest(),
+            "baseline_exit_code": baseline.get("exit_code"),
+            "post_patch_exit_code": post_patch_result.get("exit_code"),
+            "minimization_summary": approval.get("minimization_summary"),
+            "mutation_adequacy_summary": approval.get("mutation_adequacy_summary"),
+            "approved_by": str(approval.get("approver_id") or "unknown"),
+            "approved_at_utc": approved_dt.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        })
+        evidence = attest_payload(evidence, signing_key=signing_key)
+        evidence_json = canonicalize_jcs(evidence)
 
     # Write files only after the APPROVED gate has passed.
+    if bundle_dir.is_symlink():
+        raise ValueError("Bundle output must not be a symlink")
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    (bundle_dir / "evidence.json").write_text(evidence_json, encoding="utf-8", newline="\n")
-    (bundle_dir / "approved.patch").write_text(approved_diff, encoding="utf-8", newline="\n")
+    for name in ("evidence.json", "approved.patch", "REPORT.md"):
+        target = bundle_dir / name
+        if target.is_symlink() or not target.resolve().is_relative_to(bundle_dir.resolve()):
+            raise ValueError("Bundle output artifact must not be a symlink")
+    (bundle_dir / "evidence.json").write_bytes(evidence_json)
+    (bundle_dir / "approved.patch").write_bytes(patch_bytes)
     (bundle_dir / "REPORT.md").write_text(
         _render_report_md(evidence),
         encoding="utf-8",
@@ -165,6 +199,14 @@ def _render_report_md(ev: dict[str, Any]) -> str:
     lines.append(f"- Attempts used: {ev['attempts_used']} / {ev['max_attempts']}")
     lines.append(f"- Termination reason: `{ev['termination_reason']}`")
     lines.append(f"- Bundle hash (SHA-256): `{ev.get('bundle_hash', '')}`")
+    lines.extend(["", "## Attestation", ""])
+    lines.append(f"- Mode: `{ev.get('attestation_mode')}`")
+    lines.append(f"- Key ID: `{ev.get('key_id') or 'unkeyed'}`")
+    lines.append(f"- Bundle PAE digest: `{ev.get('approval_hash')}`")
+    lines.append("- Offline verification: `agentsentinel verify-bundle --bundle-dir <path>`")
+    lines.append(
+        "- HMAC authenticates shared-key possession; unkeyed mode provides integrity only."
+    )
     approval = ev.get("approval_record") or {}
     if approval:
         lines.append("")
@@ -175,7 +217,7 @@ def _render_report_md(ev: dict[str, Any]) -> str:
         lines.append(f"- Diff hash: `{approval.get('diff_hash')}`")
         lines.append(f"- Image digest: `{approval.get('image_digest')}`")
         lines.append(f"- Post-patch result hash: `{approval.get('post_patch_result_hash')}`")
-        lines.append(f"- Approval signature: `{approval.get('approval_hash')}`")
+        lines.append(f"- Legacy approval binding (unkeyed): `{approval.get('approval_hash')}`")
     minimization = approval.get("minimization_summary")
     mutation = approval.get("mutation_adequacy_summary")
     if minimization is not None:
