@@ -14,6 +14,7 @@ from agentsentinel.verification.symbolic_constants import ConstantFolder, qualif
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from typing import NoReturn
 
 ERR_M13C_INDIRECT_REFLECTION = "ERR_M13C_INDIRECT_REFLECTION"
 ERR_M13C_OBFUSCATED_LITERAL = "ERR_M13C_OBFUSCATED_LITERAL"
@@ -223,6 +224,12 @@ class _Scanner(ast.NodeVisitor):
         self.structural = structural
         self.toplevel = toplevel
         self.allow_numeric_module_constants = allow_numeric_module_constants
+        self.eager_annotations = not any(
+            isinstance(stmt, ast.ImportFrom)
+            and stmt.module == "__future__"
+            and any(alias.name == "annotations" for alias in stmt.names)
+            for stmt in tree.body
+        )
         # Definitions are resolved statically; no class is instantiated.
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
@@ -254,12 +261,33 @@ class _Scanner(ast.NodeVisitor):
         self.events.append(
             _Event(
                 self.scope,
-                f"{meaning}:{ast.dump(node, include_attributes=False)}",
+                f"{meaning}:{self._call_bindings(node)!r}:"
+                f"{ast.dump(node, include_attributes=False)}",
                 SecondOrderFinding(code, getattr(node, "lineno", 1), _MESSAGES[code], reason),
                 values,
                 digest_compare,
             )
         )
+
+    def _call_bindings(self, node: ast.AST) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    qualified_name(child.func, self.aliases)
+                    for child in ast.walk(node)
+                    if isinstance(child, ast.Call)
+                }
+            )
+        )
+
+    def _audit_annotation(self, annotation: ast.AST | None) -> None:
+        if (
+            self.structural
+            and self.eager_annotations
+            and annotation is not None
+            and any(isinstance(child, (ast.Call, ast.NamedExpr)) for child in ast.walk(annotation))
+        ):
+            self.emit(ERR_M13C_TOPLEVEL_SIDEEFFECT, annotation)
 
     def fold(self, node: ast.AST) -> object:
         return ConstantFolder(self.aliases).fold(node)
@@ -394,6 +422,15 @@ class _Scanner(ast.NodeVisitor):
                     ):
                         self.emit(ERR_M13C_TOPLEVEL_SIDEEFFECT, decorator, name)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for arg in (
+                    *node.args.posonlyargs,
+                    *node.args.args,
+                    *node.args.kwonlyargs,
+                    *([node.args.vararg] if node.args.vararg else []),
+                    *([node.args.kwarg] if node.args.kwarg else []),
+                ):
+                    self._audit_annotation(arg.annotation)
+                self._audit_annotation(node.returns)
                 for default in (*node.args.defaults, *node.args.kw_defaults):
                     if default is not None and not _immutable(default):
                         self.emit(ERR_M13C_TOPLEVEL_SIDEEFFECT, default)
@@ -464,6 +501,8 @@ class _Scanner(ast.NodeVisitor):
         self.visit_For(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if not self.scope or self.class_context is not None:
+            self._audit_annotation(node.annotation)
         self.generic_visit(node)
         self._bind(node.target, node.value)
         if (
@@ -719,6 +758,21 @@ def _record(finding: SecondOrderFinding) -> None:
         ERR_M13C_TOPLEVEL_SIDEEFFECT: "ast_toplevel_sideeffect_count",
     }[finding.code]
     _metrics = replace(_metrics, **{field: getattr(_metrics, field) + 1})
+
+
+def reject_obfuscated_literal(file_path: str, leaked_literal: str = "") -> NoReturn:
+    """Preserve M8 literal properties without rendering assertion data in feedback."""
+    code = ERR_M13C_OBFUSCATED_LITERAL
+    _record(SecondOrderFinding(code, 1, _MESSAGES[code], "overfit"))
+    raise OverfitPolicyError(
+        leaked_literal=leaked_literal,
+        file_path=file_path,
+        message=(
+            f"{code}: Overfit policy violation: "
+            f"leaked_literal={leaked_literal!r} in {file_path!r}"
+        ),
+        diagnostic_code=code,
+    )
 
 
 def verify_second_order_evasion(

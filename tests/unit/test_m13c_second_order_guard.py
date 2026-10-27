@@ -348,6 +348,48 @@ def test_definition_time_class_execution_is_not_a_purity_bypass(source: str) -> 
         guard("", source)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def f(x: mutate_env()):\n    return x\n",
+        "def f() -> mutate_env():\n    return 1\n",
+        "value: mutate_env()\n",
+        "class C:\n    value: mutate_env()\n",
+    ],
+)
+def test_eager_annotation_calls_are_definition_side_effects(source: str) -> None:
+    with pytest.raises(OverfitPolicyError, match="ERR_M13C_TOPLEVEL_SIDEEFFECT"):
+        guard("", source)
+    guard("", "from __future__ import annotations\n" + source)
+
+
+def test_changed_digest_import_alias_is_a_new_hazard() -> None:
+    pre = (
+        "from zlib import crc32 as checksum\ndef f(s):\n    return checksum(s.encode()) == 12345\n"
+    )
+    with pytest.raises(OverfitPolicyError, match="ERR_M13C_OBFUSCATED_LITERAL"):
+        guard(pre, pre.replace("crc32", "adler32"))
+
+
+@pytest.mark.parametrize("expression", ['"te" + "st"', '"".join(["te", "st"])', 'b"test".decode()'])
+def test_legacy_folds_have_structured_codes_metrics_and_legacy_literal_property(
+    tmp_path: Path, expression: str
+) -> None:
+    from agentsentinel.verification import (
+        get_second_order_evasion_metrics,
+        reset_second_order_evasion_metrics,
+    )
+    from agentsentinel.verification.overfit_guard import verify_not_overfitted
+
+    reset_second_order_evasion_metrics()
+    source = f"def f(s):\n    if s == {expression}:\n        return True\n    return False\n"
+    with pytest.raises(OverfitPolicyError) as caught:
+        verify_not_overfitted(tmp_path, {}, {"app.py": source}, frozenset({"test"}))
+    assert caught.value.diagnostic_code == "ERR_M13C_OBFUSCATED_LITERAL"
+    assert caught.value.leaked_literal == "test"
+    assert get_second_order_evasion_metrics().ast_literal_obfuscation_folded_count == 1
+
+
 def test_empty_specific_exception_handlers_are_reported() -> None:
     with pytest.raises(OverfitPolicyError, match="ERR_M13C_CONTEXT_SUPPRESSION"):
         guard("", "def f():\n    try:\n        work()\n    except ValueError:\n        pass\n")

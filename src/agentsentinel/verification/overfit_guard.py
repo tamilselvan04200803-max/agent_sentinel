@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 from agentsentinel.domain.exceptions import OverfitPolicyError
 from agentsentinel.verification.contract_guard import verify_public_api_compatibility
 from agentsentinel.verification.patch_minimizer import check_ast_bloat_and_debug_residue
-from agentsentinel.verification.second_order_guard import verify_second_order_evasion
+from agentsentinel.verification.second_order_guard import (
+    reject_obfuscated_literal,
+    verify_second_order_evasion,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -492,10 +495,7 @@ def verify_not_overfitted(
                             and val in literals
                             and val not in pre_constants
                         ):
-                            raise OverfitPolicyError(
-                                leaked_literal=str(val),
-                                file_path=file_path,
-                            )
+                            reject_obfuscated_literal(file_path, str(val))
 
             for sub in ast.walk(test_expr):
                 if isinstance(sub, ast.Compare):
@@ -519,10 +519,7 @@ def verify_not_overfitted(
                             and val in literals
                             and val not in pre_constants
                         ):
-                            raise OverfitPolicyError(
-                                leaked_literal=str(val),
-                                file_path=file_path,
-                            )
+                            reject_obfuscated_literal(file_path, str(val))
 
         for node in ast.walk(post_tree):
             if isinstance(node, ast.Dict):
@@ -535,10 +532,7 @@ def verify_not_overfitted(
                             and val in literals
                             and val not in pre_constants
                         ):
-                            raise OverfitPolicyError(
-                                leaked_literal=str(val),
-                                file_path=file_path,
-                            )
+                            reject_obfuscated_literal(file_path, str(val))
 
         verify_second_order_evasion(
             file_path, pre_src, post_src, literals, check_structural=False,

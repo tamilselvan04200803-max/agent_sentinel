@@ -125,7 +125,51 @@ def copy_shadow():
         copied.symlink_to(os.path.relpath(SHADOW / target, copied.parent))
 
 
-def stop_group(process):
+def stop_detached_descendants():
+    # The production wrapper is Linux-only (PR_SET_CHILD_SUBREAPER above).
+    # Windows stdlib-process test doubles have no /proc or real descendants.
+    if os.name != "posix":
+        return
+    deadline = time.perf_counter() + 2.0
+    while True:
+        parents = {}
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdecimal():
+                continue
+            try:
+                fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+                parents[int(entry.name)] = int(fields[1])
+            except FileNotFoundError:
+                continue
+        descendants = {os.getpid()}
+        while True:
+            expanded = descendants | {pid for pid, parent in parents.items()
+                                      if parent in descendants}
+            if expanded == descendants:
+                break
+            descendants = expanded
+        descendants.discard(os.getpid())
+        for pid in descendants:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        # Reap adopted children regardless of their current process group/session.
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+            except ChildProcessError:
+                break
+        if not descendants:
+            return
+        if time.perf_counter() >= deadline:
+            raise TimeoutError("descendant cleanup incomplete")
+        time.sleep(0.01)
+
+
+def stop_group(process, cleanup_detached=False):
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -138,6 +182,8 @@ def stop_group(process):
             os.waitpid(-process.pid, 0)
         except ChildProcessError:
             break
+    if cleanup_detached:
+        stop_detached_descendants()
 
 
 def evaluate(mutant, test_ids, timeout, detailed=False):
@@ -182,7 +228,7 @@ def evaluate(mutant, test_ids, timeout, detailed=False):
                 outcome = "killed"
                 status, code, runtime = "KILLED_BY_TIMEOUT", None, timeout
         finally:
-            stop_group(process)
+            stop_group(process, detailed)
         if detailed:
             return {"mutant_id": mutant["id"], "status": status,
                     "exit_code": code, "runtime_sec": runtime}

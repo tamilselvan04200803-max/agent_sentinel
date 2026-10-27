@@ -22,6 +22,10 @@ from agentsentinel.verification.differential_mutation import (
     DifferentialPatchMutant,
     generate_differential_patch_mutants,
 )
+from agentsentinel.verification.mutation_batch import (
+    MutantExecutionResult,
+    run_in_container_mutation_batch_detailed,
+)
 from agentsentinel.verification.mutation_probe import (
     PatchMutant,
     generate_patch_mutants,
@@ -60,6 +64,7 @@ from agentsentinel.verification.second_order_guard import (
 from agentsentinel.verification.symbolic_constants import fold_symbolic_constant
 
 __all__ = [
+    "MutantExecutionResult", "run_in_container_mutation_batch_detailed",
     "ERR_M13C_ABRUPT_FINALLY_EXIT", "ERR_M13C_CONTEXT_SUPPRESSION",
     "ERR_M13C_INDIRECT_REFLECTION", "ERR_M13C_OBFUSCATED_LITERAL",
     "ERR_M13C_TOPLEVEL_SIDEEFFECT", "SecondOrderEvasionMetrics", "SecondOrderFinding",

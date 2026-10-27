@@ -282,11 +282,49 @@ def wrapper(tmp_path, monkeypatch):
     source, shadow = tmp_path / "source", tmp_path / "shadow"
     source.mkdir()
     (source / "mod.py").write_text("ORIGINAL = True\n", encoding="utf-8", newline="\n")
-    ns.update(SOURCE=source, SHADOW=shadow, become_subreaper=lambda: None)
+    ns.update(
+        SOURCE=source, SHADOW=shadow, become_subreaper=lambda: None,
+        # This fixture replaces the child process boundary; never scan host /proc.
+        stop_detached_descendants=lambda: None,
+    )
     monkeypatch.setattr(ns["os"], "killpg", lambda *args: None, raising=False)
     monkeypatch.setattr(ns["os"], "waitpid", Mock(side_effect=ChildProcessError), raising=False)
     monkeypatch.setattr(ns["signal"], "SIGKILL", 9, raising=False)
     return SimpleNamespace(ns=ns, source=source, shadow=shadow)
+
+
+def test_v2_cleanup_finds_children_by_parent_not_process_group():
+    ns = {"__name__": "wrapper_cleanup_test"}
+    exec(compile(mutation_batch.build_mutation_batch_script(), "<wrapper>", "exec"), ns)
+    parents = {101: 100, 102: 101}
+    killed = []
+
+    class Entry:
+        def __init__(self, pid):
+            self.name = str(pid)
+            self.pid = pid
+
+        def __truediv__(self, name):
+            assert name == "stat"
+            return self
+
+        def read_text(self):
+            return f"{self.pid} (child) S {parents[self.pid]} 999 999"
+
+    def kill(pid, signal):
+        killed.append(pid)
+        del parents[pid]
+
+    def waitpid(*args):
+        raise ChildProcessError
+
+    ns["Path"] = lambda path: SimpleNamespace(iterdir=lambda: [Entry(pid) for pid in parents])
+    ns["os"] = SimpleNamespace(name="posix", getpid=lambda: 100, kill=kill,
+                               waitpid=waitpid, WNOHANG=1)
+    ns["time"] = SimpleNamespace(perf_counter=lambda: 0.0, sleep=lambda _: None)
+    ns["signal"] = SimpleNamespace(SIGKILL=9)
+    ns["stop_detached_descendants"]()
+    assert set(killed) == {101, 102}
 
 
 def test_v2_wrapper_records_timeout_then_fresh_survivor_and_cleans(wrapper, monkeypatch, capsys):
