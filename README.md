@@ -306,6 +306,8 @@ The supported target is a single operator locally or on a dedicated single-tenan
 runner VM. Target repositories, history and fixtures are untrusted. Dynamic test,
 mutation and trace execution belongs inside the hardened Linux Docker sandbox;
 static `ci-gate` requires no container, LLM or execution of repository code.
+Invoke the trusted installed gate from outside the target checkout; CI must not
+install or launch its validator implementation from an untrusted pull request.
 Multi-tenant service operation is outside v1 scope. Feature verification does not
 complete the separate hostile-input security qualification.
 
