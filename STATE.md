@@ -1,10 +1,10 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** Repository integrity, M13A full-suite subset validation and M14 policy provenance complete; reviewed and verified.
-- **Previous Milestones:** M0-M15 complete, with live Docker milestone gates passing.
-- **Release Base:** `c36d6fb`; existing history, including `fdfa7cf`, is preserved.
+- **Current Active Milestone:** M16-M18 scoped features implemented, reviewed and verified; deployment-security qualification remains open.
+- **Previous Milestones:** M0-M15 functionality retained with its documented adaptations and deferrals.
+- **Release Base:** `a2f9c8b`; existing history, including `fdfa7cf`, is preserved.
 
-## Executive architecture (M0-M15)
+## Executive architecture (M0-M18)
 
 | Milestone | Capability | Status |
 |---|---|---|
@@ -27,6 +27,72 @@
 | M13C | Second-order AST evasion, symbolic decoding and structured retry codes | Verified |
 | M14 | Canonical keyed provenance and five-gate offline verification | Verified |
 | M15 | Standalone zero-LLM-cost, read-only CI pull-request gatekeeper | Verified |
+| M16 | Advisory causal Hop-0/1/2 and opt-in container statement observations | Verified |
+| M17 | Bounded static alpha-clone detector and advisory CI integration | Verified |
+| M18 | Recorded JVR-family metrics and trusted policy expectations | Verified |
+
+## M16-M18 scoped implementation and verification (2026-10-30)
+
+- Owner selected a single operator/local or dedicated runner VM processing hostile
+  repositories. CI support is static-only via `ci-gate`; multi-tenant service is
+  outside v1. Owner explicitly selected advisory M16 evidence and opt-in coverage.
+  These definitions supersede the earlier review's proposed milestone names.
+- Locked plan: `docs/superpowers/plans/2026-10-30-m16-m18.md`. Work occurred in
+  isolated worktrees using the existing Python 3.13.7 venv and explicit UTF-8/LF
+  writes. Original primary AGENTS.md, bytecode, temporary data and local review
+  document were not staged or modified. No dependencies, new Any/type ignores,
+  SQLite migrations or historical assertion changes were introduced.
+- M16 adds frozen FunctionCausalEvidence/CausalTraceReport/StatementCoverageReport
+  and optional EvidenceBundle fields. Both machine flags default off, preserving
+  legacy container call counts. Selected-patch evidence is checkpointed and
+  exported after reopen. Warnings keep human approval rather than reject the
+  repair or silently benchmark-auto-approve it. Existing SHA-256 approval format
+  and retry budgets remain unchanged.
+- Static causal neighborhoods combine resolved direct pre/post call edges and
+  lexical occurrence identity. Scope is the supplied maps (machine allowlist).
+  Shadowed bindings and dynamic dispatch remain unknown; graph distance is not
+  semantic causal proof. Coverage maps added statement spans to start lines and
+  traces only inside the hardened Linux container's disposable shadow tree.
+  Existing copy/subreaper cleanup is shared without changing mutation behavior.
+  Child timeout/test failure yields advisory evidence; wrapper failure is
+  infrastructure failure. Hostile code can interfere with tracing, so observed
+  lines are not security or branch-coverage proof.
+- M17 uses AST/symbol-table analysis only, positional alpha identifiers and
+  _STR_/_NUM_ abstractions. Boolean type remains separate from numeric; other
+  literal values are abstracted within type. Minimum 5 statements/25 AST nodes;
+  deterministic source/node/window/work/output budgets. Standalone includes
+  disjoint intra-function blocks; CI CLONE-001 compares changed regions across
+  distinct function occurrences to retain legacy complexity-warning behavior.
+  Budget exhaustion is explicit CloneAnalysisLimitError / advisory CLONE-002.
+  Unsupported syntax/generic annotation scopes remain conservative omissions.
+- M18 computes task-macro GRR/WDR/CAR, complete-task metrics, harmonic summaries
+  and same-task JVR from fixed recorded judgment pools. Unresolved outcomes earn
+  no credit and remain denominators; empty pools/duplicate IDs fail validation.
+  No external benchmark results are claimed. Existing JCS policy hashing and
+  attestation are reused; optional Gate5 expected-policy binding (API and CLI)
+  returns exit50 on absence/mismatch while preserving Gate3 and legacy contracts.
+  These metadata do not certify a SLSA level or prove runtime enforcement.
+- RED/GREEN evidence: M16 static/protocol/lifecycle APIs were absent before their
+  tests; M17/M18 workers recorded missing APIs and warnings. Coordinator verified
+  numeric literal abstraction and deep-AST infrastructure handling regressions.
+  One fresh final reviewer independently passed 148 new unit tests and found two
+  P2 causal-binding defects: shadowed names and unverified method receivers.
+  New regression cases reproduced 10 failures with one conservative control,
+  plus a module exception-alias failure; fixes passed 46 focused M16 checks.
+  Both material review findings are resolved; no second reviewer was dispatched.
+- Final source verification revision: `32abfe709d16fd6b2b38f027c067858bf198761c`.
+  Separately invoked PowerShell gates all exited 0: Ruff `All checks passed!`;
+  strict mypy `Success: no issues found in 53 source files`; full pytest
+  `--basetemp=.pytest_tmp -p no:schemathesis -q` reported **1342 passed, 1 skipped
+  in 137.95s (0:02:17)**. All **16 live Docker tests passed**, including new
+  observed/uncovered-line, read-only input and child-timeout scenarios.
+- Sole final skip: `tests/unit/test_validator.py:93`, Windows user cannot create
+  the symlink. An interim run had 16 additional Docker skips after the daemon
+  stopped; the installed Docker Desktop was restarted, and subsequent complete
+  live gates passed. No Docker skip is hidden in the final totals.
+- Feature verification does not close the earlier security-review remediation or
+  the previously documented M13-M15 debt. The project is not represented as
+  production-qualified for hostile repositories merely because these tests pass.
 
 ## Repository integrity and verification hardening (2026-10-30)
 
@@ -51,7 +117,8 @@
   fabricated snapshots. No SQLite schema or existing approval formula changed.
   The existing bundle HMAC mode authenticates this metadata; unkeyed mode does not.
 - M13B/M13C/M15 already contained the specified implementations and were preserved.
-  M16-M18 have no supplied definitions and were not fabricated or claimed complete.
+  At that checkpoint M16-M18 had no supplied definitions. The owner subsequently
+  supplied the scoped definitions implemented in the M16-M18 section above.
 - RED evidence: six initial M13A missing-feature failures with a passing legacy
   control; M14 missing hash/snapshot/schema checks reproduced before implementation.
   Focused gates: 77 M13A/integrity regressions, 140 M14/legacy regressions, and

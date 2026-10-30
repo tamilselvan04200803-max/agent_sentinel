@@ -29,7 +29,7 @@ CaseSpec
   -> M8 anti-overfitting & anti-reflection guard (constant-folding test literal match)
   -> M9 structural bloat, debugger and exception-swallowing checks
   -> M11 public call-signature preservation
-  -> sandbox verification (fresh workspace per attempt, pinned image digest)
+  -> sandbox verification (fresh workspace per attempt, configured container image)
   -> M12 categorized, sanitized retry feedback on failure
   -> optional M13A passing-subset search, then mutation adequacy probing
   -> AWAITING_HUMAN_APPROVAL on passing verification
@@ -47,8 +47,8 @@ CaseSpec
 | M3 | LLM clients, pricing, and prompt construction | Complete |
 | M4 | Bounded repair state machine and SQLite checkpoints | Complete |
 | M5 | Contamination-aware evaluation harness | Complete |
-| M6 | Production CLI and deterministic evidence exporter | Complete |
-| M7 | Deterministic AST fault localizer & live image digest pinning | Complete |
+| M6 | CLI and approval-gated deterministic evidence exporter | Complete |
+| M7 | Deterministic AST fault localizer & image digest resolution | Complete |
 | M8 | Anti-overfitting, anti-poisoning & anti-reflection security kernel | Complete |
 | M9A | File-aware, unique-preimage hunk-coordinate healing | Complete |
 | M9B | Structural bloat/debug/exception guards and hunk-subset generation | Complete |
@@ -60,6 +60,9 @@ CaseSpec
 | M13C | Differential second-order AST evasion guards and symbolic de-obfuscation | Complete |
 | M14 | Canonical JCS/DSSE PAE provenance and optional HMAC offline verification | Complete |
 | M15 | Standalone read-only PR audit with complete staged diagnostics | Complete |
+| M16 | Advisory causal neighborhoods and opt-in sandbox statement observations | Verified |
+| M17 | Bounded static alpha-clone detection and advisory CI warnings | Verified |
+| M18 | Recorded SWEPatchTest metrics and trusted policy expectations | Verified |
 
 ### M9-M12 interfaces and limits
 
@@ -297,6 +300,94 @@ must remain stable while read. The <500ms SLA is tested on a representative
 Only regular text-file modes/preimages are supported; symlink, directory and
 submodule mode records fail with usage code 2 instead of being treated as code.
 
+### M16 causal traceability and statement observations
+
+The supported target is a single operator locally or on a dedicated single-tenant
+runner VM. Target repositories, history and fixtures are untrusted. Dynamic test,
+mutation and trace execution belongs inside the hardened Linux Docker sandbox;
+static `ci-gate` requires no container, LLM or execution of repository code.
+Multi-tenant service operation is outside v1 scope. Feature verification does not
+complete the separate hostile-input security qualification.
+
+Set keyword-only `enable_causal_traceability=True` and optionally
+`enable_statement_coverage=True` on `RepairStateMachine`. Both default to `False`;
+the normal CLI does not enable them. Coverage also collects causal evidence.
+`analyze_causal_trace(pre_sources, post_sources, frames, max_hops=2)` accepts Python
+source maps and reports modified lexical function occurrences at Hop-0/1/2 or
+unknown distance. The graph is an undirected neighborhood of uniquely resolved
+direct calls, including callers and callees, not proof of semantic causality.
+The machine's graph covers `allowed_edit_paths`; standalone callers can supply a
+larger source map. Shadowed/import-conflicting bindings, unresolved callbacks and
+dynamic dispatch remain conservative unknowns. Nested-only body edits do not mark
+the enclosing function modified.
+
+`collect_added_statement_lines(raw_diff, baseline_workspace)` maps added physical
+lines onto post-patch statement starts, including multiline statements.
+`run_statement_coverage_probe(...)` runs those observations on the selected patch
+inside a disposable `/tmp/mut_workspace`, preserving `/workspace:ro`, read-only
+rootfs, no network and existing resource/capability limits. It reuses the mutation
+wrapper's process-group/subreaper cleanup. Child timeouts and test failures are
+advisory; setup/protocol failures remain infrastructure failures. The machine
+uses `max(1.0, 2 * accepted_result.wall_seconds)` for the child timeout; this is
+Docker-inclusive wall time, not an isolated test-performance benchmark.
+
+Frozen `CausalTraceReport` and `StatementCoverageReport` are optional fields on
+`EvidenceBundle`. They persist atomically in existing approval metadata, survive
+restart, and appear in exported JSON and Markdown. Disconnected/unknown edits,
+uncovered statements and inconclusive coverage require human review instead of
+benchmark auto-approval. Existing retry budgets and SQLite schemas are unchanged.
+Observed statement-start lines do not prove branch coverage, distinguish every
+semicolon statement, or resist deliberate tracing interference by hostile code.
+
+### M17 parser-only alpha clones
+
+`detect_type2_clones(sources, ...)` parses ASTs and stdlib symbol tables without
+importing or executing the inspected modules. It canonicalizes parameter/local
+identifiers by scope and position, abstracts strings as `_STR_` and numeric
+literals as `_NUM_`, and abstracts remaining literals within their types.
+Boolean literals remain distinct from numeric literals. Globals, attribute names,
+keyword names, operators and capture relationships retain their identities.
+Defaults require at least **5 statements and 25 AST nodes**. The standalone API
+also reports disjoint intra-function copies; CI `CLONE-001` warnings compare
+changed/new regions across distinct function occurrences. CI suppresses repeated
+regions in the same function to preserve the established complexity-warning
+contract. Similarity does not prove copying or equivalent behavior.
+
+Default budgets are 2,000,000 source bytes, 100,000 AST nodes, 10,000 candidate
+windows and 100 findings, with separate normalization/comparison work caps.
+The contained CI inventory also caps 512 Python files and 10,000 directory
+entries, excluding environments, caches, links and reparse points. Attempted
+budget overflow raises `CloneAnalysisLimitError`; CI emits advisory `CLONE-002`
+for incomplete analysis. `--strict-warnings` can fail either warning. Invalid
+syntax and unsupported generic annotation/type-alias scopes are conservative
+omissions. Absence of clone findings is not a safety guarantee. The existing
+representative CI latency test remains below 500ms; there is no universal
+latency guarantee for arbitrary input or hardware.
+
+### M18 recorded validation metrics and policy expectations
+
+`evaluation.jvr_metrics` exposes frozen `CandidateJudgment`, `TaskJudgments` and
+`JVRMetrics`, `JudgmentOutcome`, and `compute_jvr_metrics(tasks)`. Rates use
+[SWEPatchTest's metric definitions](https://arxiv.org/html/2610.18004v1#A3.SS2):
+GRR, task-weighted WDR/CAR, CT-WDR/CT-CAR, their harmonic F1 summaries, and same-task
+JVR. Values are fractions in `[0, 1]`. Fixed candidate pools retain missing,
+unresolved, flaky, timeout and infrastructure outcomes without credit. Empty
+pools and duplicate IDs are rejected; zero tasks produce zero rates. Callers
+supply ground-truth labels and stable recorded judgments. This module performs
+no benchmark execution, downloads, or inference of correctness from exit codes.
+
+The existing `policy_config_hash` remains SHA-256 over canonical JCS settings,
+including active CaseSpec rules and enabled stage flags, and is covered by the
+export envelope. Gate 3 retains stored-pair consistency checks and legacy failure
+codes. Gate 5 additionally supports a trusted expected digest:
+`agentsentinel verify-bundle --bundle-dir <path> --require-keyed
+--expected-policy-config-hash <trusted-64-lowercase-hex-digest>`.
+Missing/different policy metadata fails Gate 5 with exit 50 and
+`ERR_G5_POLICY_CONFIG_MISMATCH`; malformed expected digests are usage errors.
+Without an expectation, older bundles retain their behavior. This is policy-bound
+provenance metadata, not certification of a SLSA level or proof of enforcement.
+Internal approvals retain their existing unkeyed SHA-256 format.
+
 ## Safety and correctness invariants
 
 - A run is bounded by `max_attempts`; malformed proposals, policy violations,
@@ -474,14 +565,15 @@ import resolver or an analysis of embedded script strings.
 .\.venv\Scripts\python.exe -m pytest -p no:schemathesis -v
 ```
 
-Verified on 2026-10-30 with Python 3.13.7 and live Docker Desktop:
-**1,180 passed, 1 skipped** in **141.98 seconds**, all 14 live Docker tests passed,
-Ruff clean, and strict mypy clean across 49 source files. The skip is the expected
-unprivileged Windows symlink test. The release run disabled pytest's cache and
-used a dedicated `--basetemp` directory to avoid Windows permission conflicts.
-The final independent review findings were reproduced and fixed before this run.
-The suite includes all 12 named M13C adversarial scenarios, positive controls,
-bounded context, iterative minimization, batch isolation and legacy M15 tests.
+Verified on 2026-10-30 with Python 3.13.7 and live Linux Docker via Docker Desktop:
+**1,342 passed, 1 skipped** in **137.95 seconds**, all **16 live Docker tests passed**,
+Ruff clean, and strict mypy clean across **53 source files**. The sole skip remains
+`tests/unit/test_validator.py:93`: symlink creation is unavailable to this Windows
+user. The existing venv ran with `-B` and an isolated `--basetemp=.pytest_tmp`.
+One independent final reviewer found two causal-binding issues; both were
+reproduced and fixed with regression coverage before the final full gate.
+The suite retains the original assertions and adds M16-M18 static, protocol,
+restart/export, metric and real-container tracing regressions.
 See STATE.md for release evidence, compatibility adaptations and deferred fields.
 
 ## Honest limitations
