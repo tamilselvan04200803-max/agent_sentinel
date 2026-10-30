@@ -124,3 +124,36 @@ def test_failed_patch_never_calls_coverage(tmp_path, monkeypatch):
     assert machine.run_to_terminal(run_id).state is RunState.TERMINATED_FAILED
     assert machine.container_runner.calls == 2
     machine._store.close()
+
+
+def test_deep_static_analysis_failure_is_classified_as_infrastructure(tmp_path, monkeypatch):
+    from agentsentinel.domain.exceptions import InfrastructureFailureError
+    from agentsentinel.orchestrator.checkpoint import TerminationReason
+
+    def too_deep(*args, **kwargs):
+        raise RecursionError("AST nesting exceeded")
+
+    monkeypatch.setattr(module, "analyze_causal_trace", too_deep)
+    machine = machine_at(tmp_path, enable_causal_traceability=True)
+    run_id = machine.start_run()
+    with pytest.raises(InfrastructureFailureError):
+        machine.run_to_terminal(run_id)
+    record = machine._store.get_run(run_id)
+    assert record.termination_reason is TerminationReason.INFRASTRUCTURE_FAILURE
+    assert machine._pending_patched_ws is None
+    machine._store.close()
+
+
+def test_policy_rejected_patch_never_calls_trace_probe(tmp_path, monkeypatch):
+    from agentsentinel.domain.exceptions import OverfitPolicyError
+
+    def reject(*args, **kwargs):
+        raise OverfitPolicyError("Rejected by static policy")
+
+    monkeypatch.setattr(module, "verify_not_overfitted", reject)
+    monkeypatch.setattr(module, "run_statement_coverage_probe", lambda **kw: pytest.fail("policy rejection must skip probe"))
+    machine = machine_at(tmp_path, enable_statement_coverage=True)
+    run_id = machine.start_run()
+    assert machine.run_to_terminal(run_id).state is RunState.TERMINATED_FAILED
+    assert machine.container_runner.calls == 1
+    machine._store.close()

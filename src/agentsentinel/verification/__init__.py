@@ -27,6 +27,12 @@ from agentsentinel.verification.ci_gate import (
     render_ci_gate_markdown,
     run_ci_gate_audit,
 )
+from agentsentinel.verification.clone_detector import (
+    CloneAnalysisLimitError,
+    CloneBlock,
+    CloneFinding,
+    detect_type2_clones,
+)
 from agentsentinel.verification.differential_mutation import (
     DifferentialPatchMutant,
     generate_differential_patch_mutants,
@@ -74,6 +80,7 @@ from agentsentinel.verification.statement_coverage import run_statement_coverage
 from agentsentinel.verification.symbolic_constants import fold_symbolic_constant
 
 __all__ = [
+    "CloneAnalysisLimitError", "CloneBlock", "CloneFinding", "detect_type2_clones",
     "CausalTraceReport", "FunctionCausalEvidence", "StatementCoverageReport",
     "analyze_causal_trace", "collect_added_statement_lines", "run_statement_coverage_probe",
     "MutantExecutionResult", "run_in_container_mutation_batch_detailed",

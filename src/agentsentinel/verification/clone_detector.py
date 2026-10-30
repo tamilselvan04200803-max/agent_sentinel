@@ -1,8 +1,9 @@
 """Bounded parser-only type-2 clone evidence; never a semantic-equivalence claim.
 
 Candidates are contiguous statement regions in function suites. Parameters and local
-bindings are alpha-renamed with Python's symbol tables; literal values are abstracted
-within their types. Globals, attribute/keyword names and operator kinds remain exact.
+bindings are alpha-renamed with Python's symbol tables; strings use _STR_ and
+numeric literals use _NUM_ (booleans remain distinct). Globals, attribute/keyword
+names and operator kinds remain exact.
 Invalid syntax and unsupported annotation/type-alias scopes are skipped. Results are
 advisory and deliberately incomplete beyond the configured parser and work caps.
 """
@@ -224,16 +225,23 @@ class _Normalizer:
     def local_binding(self, scope: _Scope, name: str) -> str:
         scope_id = self.scope_ids.setdefault(scope, len(self.scope_ids))
         if name in scope.parameters:
-            return f"scope:{scope_id}:parameter:{scope.parameters[name]}"
+            return f"scope:{scope_id}:_v{scope.parameters[name]}"
         key = (scope, name)
         if key not in self.locals:
             self.locals[key] = self.local_counts.get(scope, 0)
             self.local_counts[scope] = self.locals[key] + 1
-        return f"scope:{scope_id}:local:{self.locals[key]}"
+        return f"scope:{scope_id}:_v{len(scope.parameters) + self.locals[key]}"
 
     def scalar(self, node: ast.AST, field: str, value: object) -> str:
-        if isinstance(node, ast.Constant) and field == "value":
-            return "literal:" + type(value).__name__
+        if isinstance(node, ast.Constant):
+            if field == "kind":
+                return ""  # Prefix spellings do not change the literal abstraction.
+            if field == "value":
+                if isinstance(value, str):
+                    return "_STR_"
+                if type(value) in (int, float, complex):
+                    return "_NUM_"
+                return "literal:" + type(value).__name__
         if isinstance(value, str) and (
             (isinstance(node, ast.Name) and field == "id")
             or (isinstance(node, ast.arg) and field == "arg")

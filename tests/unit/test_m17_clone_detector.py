@@ -328,3 +328,12 @@ def test_ci_clone_detection_has_no_process_or_repository_execution(tmp_path: Pat
     (tmp_path / "original.py").write_text(source, encoding="utf-8", newline="\n")
     report = run_ci_gate_audit(change(tmp_path, None, routine("second")), tmp_path)
     assert any(item.rule_id == "CLONE-001" for item in report.violations)
+
+
+def test_numeric_and_string_literal_placeholders_cover_literal_spellings():
+    first = routine()
+    floating = routine("second").replace("+ 1", "+ 1.5").replace("* 2", "* 2.5")
+    assert detector()({"a.py": first, "b.py": floating})
+    unicode_literal = routine().replace("+ 1", "+ u'a'")
+    plain_literal = routine("second").replace("+ 1", "+ 'different'")
+    assert detector()({"a.py": unicode_literal, "b.py": plain_literal})

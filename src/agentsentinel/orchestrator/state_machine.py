@@ -1047,7 +1047,7 @@ class RepairStateMachine:
                 )
         except (
             HarnessSetupError, HarnessTimeoutError, OSError, ValueError, SyntaxError,
-            PatchPolicyError,
+            RecursionError, PatchPolicyError,
         ) as error:
             self._store.record_attempt_outcome(
                 run_id, attempt_index, AttemptStatus.TEST_FAILED,
