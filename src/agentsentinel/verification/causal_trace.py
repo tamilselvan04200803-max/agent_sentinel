@@ -6,13 +6,13 @@ callers and callees; callbacks, dispatch and missing source remain unknown.
 from __future__ import annotations
 
 import ast
-from collections import deque
+from collections import Counter, deque
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from agentsentinel.domain.models import CausalTraceReport, FunctionCausalEvidence
 from agentsentinel.verification.ci_source_map import reconstruct_in_memory_source_map
-from agentsentinel.verification.differential_mutation import _body_nodes, _functions, _own_dump
+from agentsentinel.verification.differential_mutation import _functions, _own_dump
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -76,11 +76,64 @@ def _aliases(path: str, tree: ast.Module) -> dict[str, str]:
     return aliases
 
 
+
+def _scope_nodes(body: Sequence[ast.stmt]) -> list[ast.AST]:
+    """Visit one executing scope, including nested definition headers only."""
+    result: list[ast.AST] = []
+    pending: list[ast.AST] = list(reversed(body))
+    while pending:
+        node = pending.pop()
+        result.append(node)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            for field, value in ast.iter_fields(node):
+                if field == "body":
+                    continue
+                if isinstance(value, ast.AST):
+                    pending.append(value)
+                elif isinstance(value, list):
+                    pending.extend(child for child in value if isinstance(child, ast.AST))
+        else:
+            pending.extend(reversed(list(ast.iter_child_nodes(node))))
+    return result
+
+
+def _import_names(node: ast.Import | ast.ImportFrom) -> list[str]:
+    return [alias.asname or (alias.name.split(".")[0] if isinstance(node, ast.Import)
+                            else alias.name) for alias in node.names]
+
+
+def _unknown_names(nodes: Sequence[ast.AST], *, local_scope: bool = True) -> set[str]:
+    """Bindings which cannot safely identify a declared function."""
+    names: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(_import_names(node))
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
+        elif local_scope and isinstance(node, ast.ClassDef):
+            names.add(node.name)
+    return names
+
+
+def _parameters(entry: _FunctionEntry) -> set[str]:
+    args = entry.node.args
+    names = {arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+    names.update(arg.arg for arg in (args.vararg, args.kwarg) if arg is not None)
+    return names
+
+
 def _target(
     expression: ast.expr, key: _Key, entry: _FunctionEntry,
     functions: dict[_Key, _FunctionEntry], aliases: dict[str, str], shadowed: set[str],
+    receiver_rebound: set[str],
 ) -> list[_Key]:
     path, identity = key
+    if "*" in shadowed:
+        return []
     if isinstance(expression, ast.Name):
         name = expression.id
         if name in shadowed:
@@ -97,8 +150,17 @@ def _target(
         qualified = aliases.get(name, "")
     elif isinstance(expression, ast.Attribute) and isinstance(expression.value, ast.Name):
         name = expression.value.id
-        if name in {"self", "cls"} and name in {arg.arg for arg in entry.node.args.args}:
-            parent = identity[:-1]
+        parent = identity[:-1]
+        positional = [*entry.node.args.posonlyargs, *entry.node.args.args]
+        static = any(
+            (isinstance(node, ast.Name)
+             and aliases.get(node.id, node.id).split(".")[-1] == "staticmethod")
+            or (isinstance(node, ast.Attribute) and node.attr == "staticmethod")
+            for node in entry.node.decorator_list
+        )
+        if (name in {"self", "cls"} and positional and positional[0].arg == name
+                and parent and (path, parent) not in functions
+                and name not in receiver_rebound and not static):
             return [other for other in functions if other[0] == path
                     and other[1][:-1] == parent and other[1][-1][0] == expression.attr]
         if name in shadowed:
@@ -115,21 +177,45 @@ def _graph(
 ) -> tuple[dict[_Key, set[_Key]], set[tuple[_Key, int, int, str]]]:
     graph: dict[_Key, set[_Key]] = {key: set() for key in functions}
     unresolved: set[tuple[_Key, int, int, str]] = set()
+    aliases_by_path = {path: _aliases(path, tree) for path, tree in trees.items()}
+    module_unknown: dict[str, set[str]] = {}
+    for path, tree in trees.items():
+        nodes = _scope_nodes(tree.body)
+        unknown = _unknown_names(nodes, local_scope=False)
+        imports = Counter(name for node in nodes if isinstance(node, (ast.Import, ast.ImportFrom))
+                          for name in _import_names(node))
+        definitions = Counter(node.name for node in nodes
+                              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                   ast.ClassDef)))
+        assigned = _unknown_names(
+            [node for node in nodes if not isinstance(node, (ast.Import, ast.ImportFrom))],
+            local_scope=False,
+        )
+        for name in aliases_by_path[path]:
+            if imports[name] == 1 and not definitions[name] and name not in assigned:
+                unknown.discard(name)
+        unknown.update(name for name, count in definitions.items() if count > 1)
+        module_unknown[path] = unknown
+    own_nodes = {key: _scope_nodes(entry.node.body) for key, entry in functions.items()}
+    own_unknown = {key: _unknown_names(nodes) for key, nodes in own_nodes.items()}
     for key, entry in functions.items():
-        nodes = [node for node, _ in _body_nodes(entry)]
-        args = entry.node.args
-        shadowed = {arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
-        shadowed.update(arg.arg for arg in (args.vararg, args.kwarg) if arg is not None)
-        shadowed.update(node.id for node in nodes
-                        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store))
-        declared = {name for node in nodes if isinstance(node, (ast.Global, ast.Nonlocal))
-                    for name in node.names}
-        shadowed.difference_update(declared)
-        aliases = _aliases(key[0], trees[key[0]])
+        nodes = own_nodes[key]
+        shadowed = module_unknown[key[0]] | own_unknown[key] | _parameters(entry)
+        for depth in range(1, len(key[1])):
+            ancestor = (key[0], key[1][:depth])
+            if ancestor in functions:
+                shadowed.update(own_unknown[ancestor] | _parameters(functions[ancestor]))
+        receiver_rebound = own_unknown[key] | {
+            node.name for node in nodes
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        }
+        aliases = aliases_by_path[key[0]]
         for node in nodes:
             if not isinstance(node, ast.Call):
                 continue
-            targets = _target(node.func, key, entry, functions, aliases, shadowed)
+            targets = _target(
+                node.func, key, entry, functions, aliases, shadowed, receiver_rebound,
+            )
             if len(targets) == 1:
                 target = targets[0]
                 graph[key].add(target)

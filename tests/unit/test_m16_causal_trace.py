@@ -101,3 +101,46 @@ def test_multiline_added_statement_maps_to_its_start(tmp_path):
     (tmp_path / "m.py").write_text(before, encoding="utf-8", newline="\n")
     raw = "".join(unified_diff(before.splitlines(True), after.splitlines(True), "a/m.py", "b/m.py"))
     assert collect_added_statement_lines(raw, tmp_path) == (("m.py", 2),)
+
+
+@pytest.mark.parametrize("source,root_line", [
+    ("def helper():\n    return 1\ndef root():\n    import other as helper\n    return helper()\n", 3),
+    ("def helper():\n    return 1\ndef outer(helper):\n    def root():\n        return helper()\n", 4),
+    ("def helper():\n    return 1\nhelper = unknown\ndef root():\n    return helper()\n", 4),
+    ("def helper():\n    return 1\ndef root():\n    try:\n        unknown()\n    except Exception as helper:\n        return helper()\n", 3),
+    ("def helper():\n    return 1\nfrom other import helper\ndef root():\n    return helper()\n", 4),
+])
+def test_shadowed_bindings_remain_unknown_and_require_review(source, root_line):
+    report = analyze({"m.py": source}, {"m.py": source.replace("return 1", "return 2")}, [frame(line=root_line)])
+    assert distances(report) == {"helper": None}
+    assert report.unresolved_calls > 0
+    assert report.needs_review
+
+
+@pytest.mark.parametrize("source,root_line,helper_name", [
+    ("def helper():\n    return 1\ndef root(self):\n    return self.helper()\n", 3, "helper"),
+    ("class A:\n    def helper(self):\n        return 1\n    def root(self):\n        self = other\n        return self.helper()\n", 4, "A.helper"),
+    ("class A:\n    def helper(self):\n        return 1\n    def root(other, self):\n        return self.helper()\n", 4, "A.helper"),
+    ("class A:\n    def helper(self):\n        return 1\n    @staticmethod\n    def root(self):\n        return self.helper()\n", 5, "A.helper"),
+    ("class A:\n    def helper(self):\n        return 1\n    def outer(self):\n        def root():\n            return self.helper()\n", 5, "A.helper"),
+])
+def test_unverified_or_rebound_receivers_do_not_invent_methods(source, root_line, helper_name):
+    report = analyze({"m.py": source}, {"m.py": source.replace("return 1", "return 2")}, [frame(line=root_line)])
+    assert distances(report) == {helper_name: None}
+    assert report.unresolved_calls > 0 and report.needs_review
+
+
+def test_positional_only_receiver_keeps_its_class_binding():
+    source = "class A:\n    def helper(self):\n        return 1\n    def root(self, /):\n        return self.helper()\n"
+    report = analyze({"m.py": source}, {"m.py": source.replace("return 1", "return 2")}, [frame(line=4)])
+    assert distances(report) == {"A.helper": 1}
+
+
+
+def test_module_import_alias_rebound_by_exception_is_unknown():
+    main = "import lib as target\ntry:\n    unknown()\nexcept Exception as target:\n    pass\ndef root():\n    return target.helper()\n"
+    before = {"main.py": main, "lib.py": "def helper():\n    return 1\n"}
+    after = {**before, "lib.py": "def helper():\n    return 2\n"}
+    report = analyze(before, after, [frame("main.py", 6)])
+    assert distances(report) == {"helper": None}
+    assert report.needs_review and report.unresolved_calls > 0
