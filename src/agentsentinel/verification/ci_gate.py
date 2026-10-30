@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import html
 import json
 import os
+import stat
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ from agentsentinel.verification.ci_source_map import (
     contained_path,
     reconstruct_in_memory_source_map,
 )
+from agentsentinel.verification.clone_detector import CloneBlock, detect_type2_clones
 from agentsentinel.verification.overfit_guard import extract_test_assertion_literals
 
 if TYPE_CHECKING:
@@ -124,6 +127,173 @@ def _test_paths(root: Path) -> tuple[Path, ...]:
     return tuple(paths)
 
 
+_CLONE_EXCLUDED = frozenset({
+    ".git", ".venv", "venv", "env", ".env", "node_modules", ".tox", ".nox",
+    ".mypy_cache", ".ruff_cache", "__pycache__", ".pytest_cache", ".pytest_tmp",
+})
+_CLONE_MAX_BYTES = 2_000_000
+_CLONE_MAX_ENTRIES = 10_000
+_CLONE_MAX_FILES = 512
+
+
+def _clone_sources(root: Path, entries: tuple[SourceMapEntry, ...]) -> dict[str, str]:
+    """Bound contained regular-file reads; prioritize the reconstructed postimages."""
+    sources: dict[str, str] = {}
+    replaced = {
+        os.path.normcase(str(root / path))
+        for entry in entries for path in (entry.old_path, entry.file_path) if path is not None
+    }
+    remaining = _CLONE_MAX_BYTES
+    for entry in sorted(entries, key=lambda item: item.file_path):
+        path = Path(entry.file_path)
+        if (entry.status is FileLifecycleStatus.DELETED or path.suffix.casefold() != ".py"
+                or any(part.casefold() in _CLONE_EXCLUDED for part in path.parts)):
+            continue
+        if any((parent / "pyvenv.cfg").is_file() for parent in (root / path).parents
+               if parent.is_relative_to(root)):
+            continue
+        size = len(entry.post_buffer.encode("utf-8"))
+        if size <= remaining and len(sources) < _CLONE_MAX_FILES:
+            sources[entry.file_path] = entry.post_buffer
+            remaining -= size
+    pending = [root]
+    seen_entries = 0
+    while pending and remaining > 0 and len(sources) < _CLONE_MAX_FILES:
+        directory = pending.pop()
+        children: list[Path] = []
+        try:
+            with os.scandir(directory) as listing:
+                for item in listing:
+                    seen_entries += 1
+                    if seen_entries > _CLONE_MAX_ENTRIES:
+                        return sources
+                    children.append(Path(item.path))
+            if any(child.name.casefold() == "pyvenv.cfg" for child in children):
+                continue
+            directories: list[Path] = []
+            for path in sorted(children):
+                if path.name.casefold() in _CLONE_EXCLUDED:
+                    continue
+                try:
+                    info = path.lstat()
+                    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                        continue
+                    relative = contained_path(path.relative_to(root).as_posix(), root)
+                    if stat.S_ISDIR(info.st_mode):
+                        directories.append(path)
+                        continue
+                    if (not stat.S_ISREG(info.st_mode) or path.suffix.casefold() != ".py"
+                            or os.path.normcase(str(path)) in replaced or info.st_size > remaining):
+                        continue
+                    with path.open("rb") as source_file:
+                        raw = source_file.read(remaining + 1)
+                    if len(raw) > remaining:
+                        continue
+                    sources[relative] = raw.decode("utf-8")
+                    remaining -= len(raw)
+                    if len(sources) >= _CLONE_MAX_FILES:
+                        break
+                except (OSError, UnicodeError, CIGateUsageError):
+                    continue
+            pending.extend(reversed(directories))
+        except OSError:
+            continue
+    return sources
+
+
+def _statement_shape(tree: ast.Module, start: int, end: int, column: int) -> tuple[str, ...]:
+    statements: list[str] = []
+    pending: list[ast.AST] = list(reversed(tree.body))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.stmt) and (
+            start <= node.lineno and (node.end_lineno or node.lineno) <= end
+            and node.col_offset == column
+        ):
+            statements.append(ast.dump(node, include_attributes=False))
+        else:
+            pending.extend(reversed(list(ast.iter_child_nodes(node))))
+    return tuple(statements)
+
+
+def _clone_block_changed(
+    block: CloneBlock, entry: SourceMapEntry, before: ast.Module, after: ast.Module,
+) -> bool:
+    # Infer the preimage region from surviving surrounding lines, including deletions.
+    inverse = {post: pre for pre, post in entry.line_map.items()}
+    preceding = max((line for line in inverse if line < block.start_line), default=0)
+    following = min((line for line in inverse if line > block.end_line), default=0)
+    pre_start = inverse.get(block.start_line, inverse[preceding] + 1 if preceding else 1)
+    pre_end = inverse.get(block.end_line, inverse[following] - 1 if following
+                          else len(entry.pre_buffer.splitlines()))
+    owner = _clone_function_owner(block, after)
+    columns = [node.col_offset for node in ast.walk(after) if isinstance(node, ast.stmt)
+               and node.lineno == block.start_line
+               and (node.end_lineno or node.lineno) <= block.end_line
+               and not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and node.lineno == owner)]
+    if not columns:
+        return False
+    column = min(columns)
+    return _statement_shape(before, pre_start, pre_end, column) != _statement_shape(
+        after, block.start_line, block.end_line, column,
+    )
+
+
+def _clone_function_owner(block: CloneBlock, tree: ast.Module) -> int | None:
+    pending: list[tuple[ast.AST, tuple[str, ...]]] = [(tree, ())]
+    while pending:
+        node, names = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names = (*names, node.name)
+            if (not isinstance(node, ast.ClassDef) and ".".join(names) == block.function_name
+                    and node.lineno <= block.start_line
+                    and block.end_line <= (node.end_lineno or node.lineno)):
+                return node.lineno
+        pending.extend((child, names) for child in ast.iter_child_nodes(node))
+    return None
+
+
+def _clone_violations(root: Path, entries: tuple[SourceMapEntry, ...]) -> list[CIGateViolation]:
+    """Warn across distinct function occurrences, preserving legacy M15 warning budgets.
+
+    Standalone clone detection also covers disjoint intra-function blocks. The CI
+    advisory conservatively suppresses those repeated control-flow templates.
+    """
+    sources = _clone_sources(root, entries)
+    changed = {entry.file_path: entry for entry in entries}
+    parsed: dict[str, tuple[ast.Module, ast.Module]] = {}
+    warnings: dict[CloneBlock, CIGateViolation] = {}
+    for finding in detect_type2_clones(sources):
+        for block, counterpart in ((finding.original, finding.duplicate),
+                                   (finding.duplicate, finding.original)):
+            entry = changed.get(block.file_path)
+            if entry is None or block in warnings:
+                continue
+            try:
+                if entry.file_path not in parsed:
+                    parsed[entry.file_path] = (ast.parse(entry.pre_buffer),
+                                               ast.parse(entry.post_buffer))
+                before, after = parsed[entry.file_path]
+                if block.file_path == counterpart.file_path:
+                    owner = _clone_function_owner(block, after)
+                    if owner is not None and owner == _clone_function_owner(counterpart, after):
+                        continue
+                if not _clone_block_changed(block, entry, before, after):
+                    continue
+            except (SyntaxError, ValueError, RecursionError):
+                continue
+            warnings[block] = CIGateViolation(
+                block.file_path, block.start_line, "Stage 6: Type-2 Clone Analysis", "CLONE-001",
+                "WARNING", f"Function {block.function_name} contains an alpha-clone of "
+                f"{counterpart.file_path}:{counterpart.start_line}-{counterpart.end_line} "
+                f"({block.statement_count} statements, {block.node_count} AST nodes)",
+                "Review whether the copied region should share an implementation; "
+                "static similarity does not establish equivalent behavior",
+            )
+    return list(warnings.values())
+
+
 def run_ci_gate_audit(
     raw_diff: str,
     workspace_root: Path,
@@ -161,6 +331,7 @@ def run_ci_gate_audit(
             )
             violations.extend(findings)
             metrics.append(file_metrics)
+        violations.extend(_clone_violations(root, entries))
     except (CIGateUsageError, OSError, UnicodeError, RecursionError) as exc:
         return usage_error_report(
             str(exc)
