@@ -91,6 +91,7 @@ def run_ddmin_hunk_minimization(
     runner: ContainerRunnerProtocol,
     original_result: ExecutionResult,
     iterative: bool = False,
+    full_suite_command: str | list[str] | None = None,
 ) -> tuple[str, ExecutionResult, MinimizationSummary]:
     """Select the first passing generated subset using pristine candidate copies.
 
@@ -98,11 +99,23 @@ def run_ddmin_hunk_minimization(
     This bounded single pass guarantees neither a global nor a 1-minimal patch.
     The caller must already hold visibly passing evidence for every failing ID.
 
+    With ``full_suite_command``, targeted passes are only a fast filter; a subset
+    is adopted only after the declared full command passes in the same scratch
+    tree. Its full execution result is returned. The original result must already
+    represent the full passing proposal. None retains legacy standalone behavior.
+
     ``iterative=True`` restarts after each accepted reduction. On a deterministic
     policy/test oracle the result is 1-minimal among applicable, policy-accepted
     nonempty hunk deletions. This does not prove a global optimum, essential
     execution paths, or that individual mutants cannot be equivalent.
     """
+    # A supplied command is authoritative for the case's full test selection.
+    # None preserves the legacy standalone targeted-only contract.
+    if full_suite_command is not None and (
+        not full_suite_command
+        or isinstance(full_suite_command, str) and not full_suite_command.strip()
+    ):
+        raise ValueError("full_suite_command must be nonempty")
     if not _has_passing_evidence(original_result, spec.failing_test_ids):
         raise ValueError("Minimization requires passing original test-node evidence")
     count = (
@@ -119,6 +132,7 @@ def run_ddmin_hunk_minimization(
             candidate, candidate_result, summary = run_ddmin_hunk_minimization(
                 raw_diff=selected, baseline_workspace=baseline_workspace, spec=spec,
                 runner=runner, original_result=execution,
+                full_suite_command=full_suite_command,
             )
             if summary.minimized_hunks_count >= selected_count:
                 break
@@ -173,6 +187,28 @@ def run_ddmin_hunk_minimization(
                     )
                 if not _has_passing_evidence(execution, spec.failing_test_ids):
                     continue
+                if full_suite_command is not None:
+                    execution = runner.run_in_container(
+                        case_id=spec.case_id,
+                        patch_diff_hash=proposal.diff_hash,
+                        workspace_host_path=workspace,
+                        command=(list(full_suite_command)
+                                 if isinstance(full_suite_command, list)
+                                 else full_suite_command),
+                    )
+                    if (
+                        execution.case_id != spec.case_id
+                        or execution.patch_diff_hash != proposal.diff_hash
+                        or is_harness_broken(execution.exit_code)
+                    ):
+                        raise HarnessSetupError(
+                            "Full-suite execution returned invalid identity or harness status"
+                        )
+                    if (
+                        execution.stdout_truncated or execution.stderr_truncated
+                        or not _has_passing_evidence(execution, spec.failing_test_ids)
+                    ):
+                        continue
                 selected_count = sum(len(file.hunks) for file in candidate_files)
                 return (
                     candidate,

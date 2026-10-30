@@ -109,6 +109,11 @@ def canonicalize_jcs(obj: object) -> bytes:
         raise ProvenanceSchemaError("Invalid Unicode or excessive JSON depth") from exc
 
 
+def compute_policy_config_hash(policy_config: Mapping[str, object]) -> str:
+    """Hash canonical configuration metadata, without reading live process state."""
+    return hashlib.sha256(canonicalize_jcs(dict(policy_config))).hexdigest()
+
+
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:

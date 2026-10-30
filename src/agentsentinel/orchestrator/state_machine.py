@@ -43,6 +43,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from agentsentinel.cli.provenance import compute_policy_config_hash
 from agentsentinel.domain.exceptions import (
     AgentSentinelError,
     ApprovalIntegrityError,
@@ -1028,11 +1029,34 @@ class RepairStateMachine:
                 image_digest,
                 post_patch_hash,
             )
+            runner_settings: object = None
+            if isinstance(self.container_runner, HardenedContainerRunner):
+                runner_settings = asdict(self.container_runner.config)
+            policy_config: dict[str, object] = {
+                "schema_version": "agentsentinel.policy_config.v1",
+                "allowed_edit_paths": list(self.spec.allowed_edit_paths),
+                "test_command": self.spec.test_command,
+                "failing_test_ids": list(self.spec.failing_test_ids),
+                "max_attempts": self.max_attempts,
+                "enforce_overfit_guard": self.enforce_overfit_guard,
+                "enable_ddmin_minimization": self.enable_ddmin_minimization,
+                "full_suite_minimization": self.enable_ddmin_minimization,
+                "enable_iterative_ddmin": self.enable_iterative_ddmin,
+                "enable_mutation_probe": self.enable_mutation_probe,
+                "enable_single_container_mutation_batch": (
+                    self.enable_single_container_mutation_batch
+                ),
+                "max_mutants": self.max_mutants,
+                # External runner implementations do not expose verified settings.
+                "sandbox": runner_settings,
+            }
             approval_record: dict[str, Any] = {
                 "diff_hash": patch.diff_hash,
                 "image_digest": image_digest,
                 "post_patch_result_hash": post_patch_hash,
                 "approval_hash": approval_hash,
+                "policy_config": policy_config,
+                "policy_config_hash": compute_policy_config_hash(policy_config),
             }
             if minimization is not None:
                 approval_record["minimization_summary"] = asdict(minimization)
@@ -1117,6 +1141,7 @@ class RepairStateMachine:
                 raw_diff=patch.unified_diff, baseline_workspace=baseline, spec=self.spec,
                 runner=self.container_runner, original_result=result,
                 iterative=self.enable_iterative_ddmin,
+                full_suite_command=_append_test_args(self.spec.test_command),
             )
         with self._ws_mgr.create_workspace() as scratch:
             selected_ws = patched_ws

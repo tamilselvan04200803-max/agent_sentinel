@@ -18,6 +18,7 @@ from agentsentinel.cli.provenance import (
     ProvenanceSchemaError,
     canonicalize_jcs,
     compute_dsse_pae,
+    compute_policy_config_hash,
     digest_matches,
     loads_strict_jcs,
     resolve_signing_key,
@@ -148,6 +149,14 @@ def _validate_schema(evidence: dict[str, object]) -> None:
             evidence[name] is not None and not isinstance(evidence[name], str)
         ):
             raise ProvenanceSchemaError("Missing or invalid attestation field")
+    if "policy_config" in evidence or "policy_config_hash" in evidence:
+        policy_config = evidence.get("policy_config")
+        policy_hash = evidence.get("policy_config_hash")
+        if (
+            not isinstance(policy_config, dict) or not isinstance(policy_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", policy_hash) is None
+        ):
+            raise ProvenanceSchemaError("Missing or invalid policy configuration metadata")
     _approved_timestamp(cast("str", evidence["approved_at_utc"]))
 
 
@@ -210,6 +219,12 @@ def verify_exported_bundle(
         hashlib.sha256(canonical).hexdigest(), cast("str", evidence["bundle_hash"]),
     ):
         return report(30, "ERR_G3_CANONICAL_BINDING_FAILED")
+
+    policy_config = evidence.get("policy_config")
+    if isinstance(policy_config, dict) and not digest_matches(
+        compute_policy_config_hash(policy_config), cast("str", evidence["policy_config_hash"]),
+    ):
+        return report(30, "ERR_G3_POLICY_CONFIG_MISMATCH")
 
     gates.append(4)
     try:

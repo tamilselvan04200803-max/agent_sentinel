@@ -119,6 +119,16 @@ candidate is selected, with every expected test ID required to pass. This is a
 single-pass search and does not establish global minimum or ddmin 1-minimality.
 `codeslop_hunks_removed` counts removed hunks; it does not prove they were dead code.
 
+Production minimization now uses targeted failing IDs as a fast filter, then
+runs the declared `CaseSpec.test_command` with verbose node evidence before
+adopting a subset. A subset fixing the failing test but breaking a passing test
+is rejected; the original verified patch is retained when no subset qualifies.
+The returned approval-bound result is the full-suite result. Standalone callers
+supply `full_suite_command=...` to enable this gate; `None` preserves legacy
+standalone call counts. The original result must already represent a full passing
+proposal. The guarantee covers tests selected by the configured command, not
+unlisted requirements or the completeness of the test oracle.
+
 Opt into repeated reductions with `enable_iterative_ddmin=True` on the state
 machine (alongside minimization), or `run_ddmin_hunk_minimization(..., iterative=True)`.
 Each accepted reduction strictly decreases the hunk count. Exhausting nonempty
@@ -209,6 +219,25 @@ limits are 48 nested evaluations, 4,096 operations, 256 comprehension iterations
 1,024 repetitions and 65,536 materialized characters/bytes per value. Unordered
 multi-element sets and randomized `hash()` values are not evaluated; hash
 comparisons are identified structurally. Latency targets apply to test fixtures.
+
+### M14 policy configuration provenance
+
+New verified runs persist `policy_config` and
+`policy_config_hash = SHA256(JCS(policy_config))` atomically with accepted evidence.
+The snapshot contains declared paths/test selection, repair controls/budgets,
+post-pass settings and the actual hardened runner's configuration. External
+runner configuration is explicitly unknown (`null`). Export validates the stored
+pair and includes it in the existing canonical attestation. Gate 1 rejects
+incomplete/malformed pairs; Gate 3 rejects an inconsistent policy hash with
+`ERR_G3_POLICY_CONFIG_MISMATCH` (exit 30). Older records/bundles without either
+field remain supported and do not acquire invented policy settings.
+
+`cli.provenance.compute_policy_config_hash()` hashes supplied metadata without
+reading live settings or secrets. This records configured policy, not a proof of
+arbitrary execution behavior or an endorsement of weak settings. The existing
+three-component approval hash formula remains unchanged; the exported payload
+binds the policy metadata through the existing SHA-256/HMAC modes. Unkeyed mode
+provides integrity binding, not keyed authentication.
 
 ### M15 standalone CI gate
 
@@ -433,14 +462,20 @@ LLM calls, tokens, and latency.
 
 ## Development and verification
 
+`tests/unit/test_repo_integrity_guard.py` parses every source module to reject
+unapproved static import roots, legacy AST node references, `shell=True` and bare
+handlers. It checks aliases/direct legacy AST imports and validates its detectors
+against synthetic violations. This is a static source guard, not a runtime
+import resolver or an analysis of embedded script strings.
+
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check src tests
 .\.venv\Scripts\python.exe -m mypy --strict src
 .\.venv\Scripts\python.exe -m pytest -p no:schemathesis -v
 ```
 
-Verified on 2026-10-27 with Python 3.13.7 and live Docker Desktop:
-**1,160 passed, 1 skipped** in **128.05 seconds**, all 13 live Docker tests passed,
+Verified on 2026-10-30 with Python 3.13.7 and live Docker Desktop:
+**1,180 passed, 1 skipped** in **141.98 seconds**, all 14 live Docker tests passed,
 Ruff clean, and strict mypy clean across 49 source files. The skip is the expected
 unprivileged Windows symlink test. The release run disabled pytest's cache and
 used a dedicated `--basetemp` directory to avoid Windows permission conflicts.

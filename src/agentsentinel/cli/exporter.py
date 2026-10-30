@@ -7,7 +7,12 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from agentsentinel.cli.provenance import attest_payload, canonicalize_jcs
+from agentsentinel.cli.provenance import (
+    attest_payload,
+    canonicalize_jcs,
+    compute_policy_config_hash,
+    digest_matches,
+)
 from agentsentinel.domain.exceptions import UnapprovedExportError
 from agentsentinel.llm.prompts import sanitize_diagnostic
 from agentsentinel.orchestrator.checkpoint import (
@@ -169,6 +174,15 @@ def export_evidence_bundle(
             "approved_by": str(approval.get("approver_id") or "unknown"),
             "approved_at_utc": approved_dt.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         })
+        if "policy_config" in approval or "policy_config_hash" in approval:
+            policy_config: object = approval.get("policy_config")
+            policy_config_hash: object = approval.get("policy_config_hash")
+            if not isinstance(policy_config, dict) or not isinstance(policy_config_hash, str):
+                raise ValueError("Approved run has incomplete policy configuration evidence")
+            if not digest_matches(compute_policy_config_hash(policy_config), policy_config_hash):
+                raise ValueError("Approved policy configuration hash does not match its snapshot")
+            evidence["policy_config"] = policy_config
+            evidence["policy_config_hash"] = policy_config_hash
         evidence = attest_payload(evidence, signing_key=signing_key)
         evidence_json = canonicalize_jcs(evidence)
 

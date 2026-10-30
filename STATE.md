@@ -1,8 +1,8 @@
 # AGENTSENTINEL EXECUTION STATE
 
-- **Current Active Milestone:** M13C and useful M13A/M13B/M14/M15 R&D gaps complete; reviewed and verified.
+- **Current Active Milestone:** Repository integrity, M13A full-suite subset validation and M14 policy provenance complete; reviewed and verified.
 - **Previous Milestones:** M0-M15 complete, with live Docker milestone gates passing.
-- **Release Base:** `c1e0149`; existing history, including `fdfa7cf`, is preserved.
+- **Release Base:** `c36d6fb`; existing history, including `fdfa7cf`, is preserved.
 
 ## Executive architecture (M0-M15)
 
@@ -27,6 +27,50 @@
 | M13C | Second-order AST evasion, symbolic decoding and structured retry codes | Verified |
 | M14 | Canonical keyed provenance and five-gate offline verification | Verified |
 | M15 | Standalone zero-LLM-cost, read-only CI pull-request gatekeeper | Verified |
+
+## Repository integrity and verification hardening (2026-10-30)
+
+- Phase 1 was read-only: inspected exact current definitions and output the locked
+  implementation table before edits. Base c36d6fb had 49 source modules and no
+  static unapproved-import/legacy-AST/shell=True/bare-handler violations.
+- Added `tests/unit/test_repo_integrity_guard.py`: three requested source checks
+  plus detector controls. Source is parsed, never imported by this guard. The
+  allowed static roots are stdlib, agentsentinel, pydantic and __future__.
+- M13A: production state-machine minimization passes the declared case command
+  after the failing-ID fast filter. Only matching, untruncated full-suite passing
+  evidence is adopted and approval-bound. Regression/missing-node/timeout cases
+  reject the subset; bad identity/harness status is infrastructure failure.
+  Iterative reductions retain the same gate. Legacy standalone behavior remains
+  available when full_suite_command is None. Raw original evidence must already
+  be full-suite verified; configured test selection is not oracle-completeness proof.
+- M14: verified records atomically capture canonical policy settings and their
+  SHA-256 JCS hash, including actual hardened runner configuration. External
+  runner settings remain unknown. Export checks the stored pair and attests it;
+  optional-pair schema validation is Gate 1 and consistency is Gate 3 (exit 30,
+  ERR_G3_POLICY_CONFIG_MISMATCH). Legacy records/bundles remain supported without
+  fabricated snapshots. No SQLite schema or existing approval formula changed.
+  The existing bundle HMAC mode authenticates this metadata; unkeyed mode does not.
+- M13B/M13C/M15 already contained the specified implementations and were preserved.
+  M16-M18 have no supplied definitions and were not fabricated or claimed complete.
+- RED evidence: six initial M13A missing-feature failures with a passing legacy
+  control; M14 missing hash/snapshot/schema checks reproduced before implementation.
+  Focused gates: 77 M13A/integrity regressions, 140 M14/legacy regressions, and
+  19 new unit checks passed. The new real Docker pass-to-pass regression passed
+  in 11.47s after starting the existing daemon; no package installation occurred.
+- One independent final reviewer found no actionable issues; independently ran
+  the 19 new unit checks successfully (4.40s). No existing assertions were changed,
+  skipped or weakened, and no dependencies/new Any/type ignores were added.
+- Final separately invoked PowerShell gates, existing Python 3.13.7 venv, -B:
+  Ruff: `All checks passed!` (exit 0).
+  Strict mypy: `Success: no issues found in 49 source files` (exit 0).
+  Full pytest `--basetemp=.pytest_tmp -p no:schemathesis -q`:
+  **1180 passed, 1 skipped in 141.98s (0:02:21)** (exit 0).
+  All **14 live Docker tests passed**; sole skip is test_validator.py:93,
+  "Symlink creation not supported in this user environment" on Windows.
+- README/STATE were first updated only after all three exit codes were confirmed.
+  User AGENTS.md, tracked bytecode, original tests and primary .pytest_tmp remain
+  untouched. All work stayed within the locked file table and existing M13A-M15
+  authorization; there were no conflicting legacy test failures requiring rollback.
 
 ## M13C and R&D integration (2026-10-27)
 
