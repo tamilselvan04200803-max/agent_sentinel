@@ -164,14 +164,99 @@ def test_invalid_limits_raise_value_error(limit: str, value: int) -> None:
         detector()({}, **{limit: value})
 
 
-def test_resource_limits_and_bad_syntax_are_bounded_and_deterministic() -> None:
+@pytest.mark.parametrize("limit,value,expected", [
+    ("max_source_bytes", 20, "source_bytes"),
+    ("max_ast_nodes", 10, "ast_nodes"),
+    ("max_windows", 1, "source_inventory"),
+    ("max_findings", 1, "findings"),
+])
+def test_resource_exhaustion_is_typed_and_deterministic(limit: str, value: int, expected: str) -> None:
+    from agentsentinel.verification.clone_detector import CloneAnalysisLimitError
+
+    sources = {"a.py": routine(), "b.py": routine("second"), "c.py": routine("third")}
+    for ordered in (sources, dict(reversed(tuple(sources.items())))):
+        with pytest.raises(CloneAnalysisLimitError) as raised:
+            detector()(ordered, **{limit: value})
+        assert isinstance(raised.value, ValueError)
+        assert raised.value.limit_name == expected
+        assert raised.value.limit == value
+        assert len(str(raised.value)) < 160
+
+
+def test_window_exhaustion_does_not_look_like_no_clones() -> None:
+    from agentsentinel.verification.clone_detector import CloneAnalysisLimitError
+
+    with pytest.raises(CloneAnalysisLimitError) as raised:
+        detector()({"a.py": routine()}, max_windows=1)
+    assert (raised.value.limit_name, raised.value.limit) == ("windows", 1)
+
+
+def test_normalization_exhaustion_does_not_return_partial_evidence() -> None:
+    from agentsentinel.verification.clone_detector import CloneAnalysisLimitError
+
+    source = "def first(value):\n" + "    value = value + 1\n" * 20 + "    return value\n"
+    with pytest.raises(CloneAnalysisLimitError) as raised:
+        detector()({"a.py": source}, max_ast_nodes=200)
+    assert (raised.value.limit_name, raised.value.limit) == ("normalization", 3200)
+
+
+def test_comparison_exhaustion_has_a_distinct_typed_limit() -> None:
+    from agentsentinel.verification.clone_detector import CloneAnalysisLimitError
+
+    source = "def first():\n" + "    pass\n" * 130
+    with pytest.raises(CloneAnalysisLimitError) as raised:
+        detector()({"a.py": source}, min_statements=1, min_nodes=1,
+                   max_ast_nodes=1_000_000, max_findings=100_000)
+    assert (raised.value.limit_name, raised.value.limit) == ("comparisons", 80_000)
+
+
+def test_completed_analysis_can_return_no_clones_at_exact_resource_caps() -> None:
+    source = "x = 1\n"
+    assert detector()({"a.py": source}, max_source_bytes=6, max_ast_nodes=5, max_windows=1) == ()
+    assert detector()({"a.py": "def first():\n    pass\n"}, max_windows=1) == ()
+    assert len(detector()({"a.py": routine(), "b.py": routine("second")}, max_findings=1)) == 1
+
+
+def test_bad_syntax_and_parser_recursion_remain_conservative_omissions() -> None:
     sources = {"a.py": routine(), "b.py": routine("second")}
-    assert detector()(sources, max_source_bytes=20) == ()
-    assert detector()(sources, max_ast_nodes=10) == ()
-    assert len(detector()(sources, max_windows=1)) <= 1
-    assert len(detector()({**sources, "c.py": routine("third")}, max_findings=1)) == 1
     assert detector()({"broken.py": "def broken(:\n", **sources}) == detector()(sources)
     assert detector()({"huge.py": "x = " + "+".join(["1"] * 10000)}) == ()
+
+
+@pytest.mark.parametrize("kind", ["source_bytes", "windows", "normalization"])
+def test_ci_incomplete_clone_analysis_is_a_bounded_advisory(tmp_path: Path, kind: str) -> None:
+    after = routine()
+    if kind == "source_bytes":
+        (tmp_path / "oversize.py").write_text("#" * 2_000_001, encoding="utf-8", newline="\n")
+    else:
+        count = 160 if kind == "windows" else 100
+        after = "def first(value):\n" + "    value = value + 1\n" * count + "    return value\n"
+    diff = change(tmp_path, None, after)
+    report = run_ci_gate_audit(diff, tmp_path)
+    warnings = [item for item in report.violations if item.rule_id == "CLONE-002"]
+    assert report.exit_code == 0
+    assert len(warnings) == 1
+    assert warnings[0].severity == "WARNING"
+    assert "incomplete" in warnings[0].message.lower()
+    assert kind in warnings[0].message
+    assert len(warnings[0].message) < 200
+    assert run_ci_gate_audit(diff, tmp_path, strict_warnings=True).exit_code == 1
+
+
+@pytest.mark.parametrize("limit_name", ["files", "inventory_entries"])
+def test_ci_inventory_limits_cannot_silently_skip_remaining_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit_name: str) -> None:
+    from agentsentinel.verification import ci_gate
+
+    attribute = "_CLONE_MAX_FILES" if limit_name == "files" else "_CLONE_MAX_ENTRIES"
+    monkeypatch.setattr(ci_gate, attribute, 1)
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
+    (tmp_path / "b.py").write_text("x = 2\n", encoding="utf-8", newline="\n")
+    report = run_ci_gate_audit(change(tmp_path, None, routine()), tmp_path)
+    warnings = [item for item in report.violations if item.rule_id == "CLONE-002"]
+    assert report.exit_code == 0
+    assert len(warnings) == 1
+    assert limit_name in warnings[0].message
+    assert "(1)" in warnings[0].message
 
 
 def test_ci_reports_only_changed_clone_blocks_and_remains_advisory(tmp_path: Path) -> None:

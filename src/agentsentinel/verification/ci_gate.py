@@ -28,7 +28,11 @@ from agentsentinel.verification.ci_source_map import (
     contained_path,
     reconstruct_in_memory_source_map,
 )
-from agentsentinel.verification.clone_detector import CloneBlock, detect_type2_clones
+from agentsentinel.verification.clone_detector import (
+    CloneAnalysisLimitError,
+    CloneBlock,
+    detect_type2_clones,
+)
 from agentsentinel.verification.overfit_guard import extract_test_assertion_literals
 
 if TYPE_CHECKING:
@@ -152,13 +156,18 @@ def _clone_sources(root: Path, entries: tuple[SourceMapEntry, ...]) -> dict[str,
         if any((parent / "pyvenv.cfg").is_file() for parent in (root / path).parents
                if parent.is_relative_to(root)):
             continue
+        if len(entry.post_buffer) > remaining:
+            raise CloneAnalysisLimitError("source_bytes", _CLONE_MAX_BYTES)
         size = len(entry.post_buffer.encode("utf-8"))
-        if size <= remaining and len(sources) < _CLONE_MAX_FILES:
-            sources[entry.file_path] = entry.post_buffer
-            remaining -= size
+        if size > remaining:
+            raise CloneAnalysisLimitError("source_bytes", _CLONE_MAX_BYTES)
+        if len(sources) >= _CLONE_MAX_FILES:
+            raise CloneAnalysisLimitError("files", _CLONE_MAX_FILES)
+        sources[entry.file_path] = entry.post_buffer
+        remaining -= size
     pending = [root]
     seen_entries = 0
-    while pending and remaining > 0 and len(sources) < _CLONE_MAX_FILES:
+    while pending:
         directory = pending.pop()
         children: list[Path] = []
         try:
@@ -166,7 +175,7 @@ def _clone_sources(root: Path, entries: tuple[SourceMapEntry, ...]) -> dict[str,
                 for item in listing:
                     seen_entries += 1
                     if seen_entries > _CLONE_MAX_ENTRIES:
-                        return sources
+                        raise CloneAnalysisLimitError("inventory_entries", _CLONE_MAX_ENTRIES)
                     children.append(Path(item.path))
             if any(child.name.casefold() == "pyvenv.cfg" for child in children):
                 continue
@@ -183,16 +192,18 @@ def _clone_sources(root: Path, entries: tuple[SourceMapEntry, ...]) -> dict[str,
                         directories.append(path)
                         continue
                     if (not stat.S_ISREG(info.st_mode) or path.suffix.casefold() != ".py"
-                            or os.path.normcase(str(path)) in replaced or info.st_size > remaining):
+                            or os.path.normcase(str(path)) in replaced):
                         continue
+                    if info.st_size > remaining:
+                        raise CloneAnalysisLimitError("source_bytes", _CLONE_MAX_BYTES)
+                    if len(sources) >= _CLONE_MAX_FILES:
+                        raise CloneAnalysisLimitError("files", _CLONE_MAX_FILES)
                     with path.open("rb") as source_file:
                         raw = source_file.read(remaining + 1)
                     if len(raw) > remaining:
-                        continue
+                        raise CloneAnalysisLimitError("source_bytes", _CLONE_MAX_BYTES)
                     sources[relative] = raw.decode("utf-8")
                     remaining -= len(raw)
-                    if len(sources) >= _CLONE_MAX_FILES:
-                        break
                 except (OSError, UnicodeError, CIGateUsageError):
                     continue
             pending.extend(reversed(directories))
@@ -260,11 +271,19 @@ def _clone_violations(root: Path, entries: tuple[SourceMapEntry, ...]) -> list[C
     Standalone clone detection also covers disjoint intra-function blocks. The CI
     advisory conservatively suppresses those repeated control-flow templates.
     """
-    sources = _clone_sources(root, entries)
+    try:
+        sources = _clone_sources(root, entries)
+        findings = detect_type2_clones(sources)
+    except CloneAnalysisLimitError as exc:
+        return [CIGateViolation(
+            "", 1, "Stage 6: Type-2 Clone Analysis", "CLONE-002", "WARNING",
+            f"Clone analysis incomplete: {exc.limit_name} limit ({exc.limit}) exceeded",
+            "Review clones manually or rerun standalone analysis with explicit larger bounds",
+        )]
     changed = {entry.file_path: entry for entry in entries}
     parsed: dict[str, tuple[ast.Module, ast.Module]] = {}
     warnings: dict[CloneBlock, CIGateViolation] = {}
-    for finding in detect_type2_clones(sources):
+    for finding in findings:
         for block, counterpart in ((finding.original, finding.duplicate),
                                    (finding.duplicate, finding.original)):
             entry = changed.get(block.file_path)

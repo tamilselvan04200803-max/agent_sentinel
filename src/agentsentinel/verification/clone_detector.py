@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 import symtable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -32,6 +32,21 @@ class CloneBlock:
 class CloneFinding:
     original: CloneBlock
     duplicate: CloneBlock
+
+
+_CloneLimit = Literal[
+    "source_inventory", "source_bytes", "ast_nodes", "windows", "normalization",
+    "comparisons", "findings", "inventory_entries", "files",
+]
+
+
+class CloneAnalysisLimitError(ValueError):
+    """Analysis is incomplete because a configured bound would be exceeded."""
+
+    def __init__(self, limit_name: _CloneLimit, limit: int) -> None:
+        self.limit_name = limit_name
+        self.limit = limit
+        super().__init__(f"Clone analysis exceeded {limit_name} limit ({limit})")
 
 
 @dataclass(eq=False)
@@ -153,18 +168,15 @@ class _ScopeMap:
             self.visit(child, scope, names)
 
 
-class _BudgetExhausted(ValueError):
-    """A deterministic normalization budget was consumed."""
-
-
-@dataclass
 class _Work:
-    remaining: int
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.remaining = limit
 
     def tick(self) -> None:
         self.remaining -= 1
         if self.remaining < 0:
-            raise _BudgetExhausted
+            raise CloneAnalysisLimitError("normalization", self.limit)
 
 
 class _Normalizer:
@@ -309,6 +321,7 @@ def _findings(
     max_comparisons: int,
 ) -> tuple[CloneFinding, ...]:
     findings: list[CloneFinding] = []
+    comparison_limit = max_comparisons
     ordered = sorted(
         groups.values(),
         key=lambda blocks: (-blocks[0].node_count, -blocks[0].statement_count,
@@ -320,16 +333,14 @@ def _findings(
             for original in originals:
                 max_comparisons -= 1
                 if max_comparisons < 0:
-                    return tuple(sorted(findings, key=lambda f: (_block_key(f.original),
-                                                                _block_key(f.duplicate))))
+                    raise CloneAnalysisLimitError("comparisons", comparison_limit)
                 if _overlap(original, duplicate):
                     continue
                 if not any(_contains(item.original, original)
                            and _contains(item.duplicate, duplicate) for item in findings):
-                    findings.append(CloneFinding(original, duplicate))
                     if len(findings) >= max_findings:
-                        return tuple(sorted(findings, key=lambda f: (_block_key(f.original),
-                                                                    _block_key(f.duplicate))))
+                        raise CloneAnalysisLimitError("findings", max_findings)
+                    findings.append(CloneFinding(original, duplicate))
                 break
             originals.append(duplicate)
     return tuple(sorted(findings, key=lambda f: (_block_key(f.original), _block_key(f.duplicate))))
@@ -351,22 +362,24 @@ def detect_type2_clones(
     smaller windows; only maximal discovered pairs are retained. Limits apply globally:
     source bytes and AST nodes reject an oversized inventory, window attempts and a
     normalization budget of 16 * max_ast_nodes ticks and comparison budget of
-    8 * max_windows truncate evidence. Absence is never proof of safety.
+    8 * max_windows bound work. Attempted overflow, including findings overflow, raises
+    CloneAnalysisLimitError rather than returning incomplete evidence. Invalid syntax
+    and unsupported scopes remain conservative omissions; absence never proves safety.
     """
     limits = (min_statements, min_nodes, max_source_bytes, max_ast_nodes, max_windows,
               max_findings)
     if any(isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 for limit in limits):
         raise ValueError("Clone limits must be positive integers")
     if len(sources) > max_windows:
-        return ()
+        raise CloneAnalysisLimitError("source_inventory", max_windows)
     try:
         bytes_remaining = max_source_bytes
         for source in sources.values():
             if len(source) > bytes_remaining:
-                return ()
+                raise CloneAnalysisLimitError("source_bytes", max_source_bytes)
             bytes_remaining -= len(source.encode("utf-8"))
             if bytes_remaining < 0:
-                return ()
+                raise CloneAnalysisLimitError("source_bytes", max_source_bytes)
     except UnicodeError:
         return ()
     candidates: list[_Candidate] = []
@@ -379,7 +392,7 @@ def detect_type2_clones(
             for node in ast.walk(tree):
                 nodes_remaining -= 1
                 if nodes_remaining < 0:
-                    return ()
+                    raise CloneAnalysisLimitError("ast_nodes", max_ast_nodes)
                 nodes.append(node)
             scopes = _ScopeMap(tree, symtable.symtable(source, path, "exec"))
             counts: dict[ast.AST, tuple[int, int]] = {}
@@ -398,7 +411,7 @@ def detect_type2_clones(
                     for length in range(len(body), 0, -1):
                         for start in range(len(body) - length + 1):
                             if windows_remaining <= 0:
-                                break
+                                raise CloneAnalysisLimitError("windows", max_windows)
                             windows_remaining -= 1
                             end = start + length
                             count = statements[end] - statements[start]
@@ -409,8 +422,8 @@ def detect_type2_clones(
                                                    count, size)
                                 candidates.append(_Candidate(block, body, start, end, scopes,
                                                              function.scope))
-                        if windows_remaining <= 0:
-                            break
+        except CloneAnalysisLimitError:
+            raise
         except (SyntaxError, ValueError, RecursionError):
             continue
     groups: dict[tuple[str, ...], list[CloneBlock]] = {}
@@ -420,8 +433,6 @@ def detect_type2_clones(
         try:
             for index in range(candidate.start, candidate.end):
                 normalizer.visit(candidate.body[index])
-        except _BudgetExhausted:
-            break
         except RecursionError:
             continue
         groups.setdefault(tuple(normalizer.tokens), []).append(candidate.block)
