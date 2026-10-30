@@ -261,10 +261,15 @@ def _cmd_verify_bundle(args: argparse.Namespace) -> int:
             "detail": "Provide one bundle directory, positionally or with --bundle-dir",
         }))
         return 2
-    report = verify_exported_bundle(
-        Path(args.bundle_dir or args.bundle_dir_positional),
-        require_keyed=args.require_keyed, signing_key=args.signing_key,
-    )
+    try:
+        report = verify_exported_bundle(
+            Path(args.bundle_dir or args.bundle_dir_positional),
+            require_keyed=args.require_keyed, signing_key=args.signing_key,
+            expected_policy_config_hash=args.expected_policy_config_hash,
+        )
+    except ValueError as exc:
+        print(json.dumps({"error": "invalid_argument", "detail": str(exc)}))
+        return 2
     print(json.dumps(report.to_dict(), sort_keys=True))
     return report.exit_code
 
@@ -402,6 +407,10 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--bundle-dir", default=None, help="Legacy bundle directory option")
     pv.add_argument("--require-keyed", action="store_true")
     pv.add_argument("--signing-key", default=None)
+    pv.add_argument(
+        "--expected-policy-config-hash", default=None,
+        help="Require this trusted lowercase SHA-256 policy digest at Gate 5",
+    )
     pv.set_defaults(func=_cmd_verify_bundle)
 
     pc = sub.add_parser("ci-gate", help="Audit a pull-request diff offline without changing source")

@@ -167,8 +167,19 @@ def verify_exported_bundle(
     signing_key: str | bytes | None = None,
     trusted_keys: Mapping[str, str | bytes] | None = None,
     max_clock_skew_seconds: float = 300.0,
+    expected_policy_config_hash: str | None = None,
 ) -> BundleVerificationReport:
-    """Return first failure at gates 1..5, without a database, network or sandbox."""
+    """Return the first offline gate failure without executing bundle contents.
+
+    A trusted caller may require a lowercase SHA-256 policy digest at Gate 5.
+    The stored digest must first pass schema, binding and attestation gates;
+    without an expectation, legacy bundles lacking policy metadata still work.
+    """
+    if expected_policy_config_hash is not None and (
+        not isinstance(expected_policy_config_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_policy_config_hash) is None
+    ):
+        raise ValueError("expected_policy_config_hash must be a lowercase SHA-256 hex digest")
     if not math.isfinite(max_clock_skew_seconds) or max_clock_skew_seconds < 0:
         raise ValueError("max_clock_skew_seconds must be finite and nonnegative")
     mode = "unknown"
@@ -261,6 +272,12 @@ def verify_exported_bundle(
         return report(50, "ERR_G5_POST_PATCH_FAILURE")
     if evidence["status"] != "APPROVED":
         return report(50, "ERR_G5_STATUS_NOT_APPROVED")
+    if expected_policy_config_hash is not None:
+        stored_policy_hash = evidence.get("policy_config_hash")
+        if not isinstance(stored_policy_hash, str) or not digest_matches(
+            stored_policy_hash, expected_policy_config_hash,
+        ):
+            return report(50, "ERR_G5_POLICY_CONFIG_MISMATCH")
     approved = _approved_timestamp(cast("str", evidence["approved_at_utc"]))
     skew = abs((datetime.now(UTC) - approved).total_seconds()) > max_clock_skew_seconds
     return report(skew=skew)
