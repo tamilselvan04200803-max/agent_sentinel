@@ -90,6 +90,10 @@
   the symlink. An interim run had 16 additional Docker skips after the daemon
   stopped; the installed Docker Desktop was restarted, and subsequent complete
   live gates passed. No Docker skip is hidden in the final totals.
+- Post-merge primary-checkout verification independently repeated all gates:
+  Ruff exit0; strict mypy 53 files exit0; full pytest **1342 passed, 1 skipped
+  in 141.53s (0:02:21)**, all 16 live Docker tests passed. Its temporary base
+  stayed in the owned task worktree so the primary .pytest_tmp was preserved.
 - Feature verification does not close the earlier security-review remediation or
   the previously documented M13-M15 debt. The project is not represented as
   production-qualified for hostile repositories merely because these tests pass.
