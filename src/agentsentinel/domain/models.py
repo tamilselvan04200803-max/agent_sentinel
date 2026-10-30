@@ -342,6 +342,45 @@ class ExecutionResult:
 
 
 @dataclass(frozen=True)
+class FunctionCausalEvidence:
+    """Static neighborhood evidence, not proof of semantic causality."""
+
+    file_path: str
+    function_name: str
+    occurrence: int
+    start_line: int
+    hop_distance: int | None
+
+
+@dataclass(frozen=True)
+class CausalTraceReport:
+    modified_functions: tuple[FunctionCausalEvidence, ...]
+    unresolved_calls: int
+    has_traceback_roots: bool
+
+    @property
+    def needs_review(self) -> bool:
+        return bool(self.modified_functions) and (
+            not self.has_traceback_roots
+            or any(row.hop_distance is None for row in self.modified_functions)
+        )
+
+
+@dataclass(frozen=True)
+class StatementCoverageReport:
+    """Observed statement-start lines; hostile code can interfere with tracing."""
+
+    covered_statements: tuple[tuple[str, int], ...]
+    uncovered_statements: tuple[tuple[str, int], ...]
+    test_exit_code: int | None
+    timed_out: bool
+
+    @property
+    def needs_review(self) -> bool:
+        return bool(self.uncovered_statements) or self.timed_out or self.test_exit_code != 0
+
+
+@dataclass(frozen=True)
 class EvidenceBundle:
     """Immutable audit record emitted at the conclusion of a repair attempt.
 
@@ -389,6 +428,8 @@ class EvidenceBundle:
     attempts: int
     minimization_summary: MinimizationSummary | None = None
     mutation_adequacy_summary: MutationAdequacySummary | None = None
+    causal_trace_report: CausalTraceReport | None = None
+    statement_coverage_report: StatementCoverageReport | None = None
     # bundle_hash is computed in __post_init__
     bundle_hash: str = field(init=False, default="")
 
@@ -410,6 +451,10 @@ class EvidenceBundle:
             hash_fields["minimization_summary"] = asdict(self.minimization_summary)
         if self.mutation_adequacy_summary is not None:
             hash_fields["mutation_adequacy_summary"] = asdict(self.mutation_adequacy_summary)
+        for key in ("causal_trace_report", "statement_coverage_report"):
+            report = getattr(self, key)
+            if report is not None:
+                hash_fields[key] = asdict(report)
         payload = json.dumps(hash_fields, sort_keys=True)
         object.__setattr__(self, "bundle_hash", _sha256_of(payload))
 
@@ -436,4 +481,8 @@ class EvidenceBundle:
             summary["minimization_summary"] = asdict(self.minimization_summary)
         if self.mutation_adequacy_summary is not None:
             summary["mutation_adequacy_summary"] = asdict(self.mutation_adequacy_summary)
+        for key in ("causal_trace_report", "statement_coverage_report"):
+            report = getattr(self, key)
+            if report is not None:
+                summary[key] = asdict(report)
         return summary

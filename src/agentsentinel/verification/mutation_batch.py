@@ -54,7 +54,7 @@ class ContainerRunnerProtocol(Protocol):
     ) -> ExecutionResult: ...
 
 
-def build_mutation_batch_script() -> str:
+def build_shadow_workspace_prelude() -> str:
     """Return a standalone stdlib wrapper intended exclusively for a Linux container.
 
     Child streams never reach the reserved protocol channel. A new copy is made
@@ -185,6 +185,12 @@ def stop_group(process, cleanup_detached=False):
     if cleanup_detached:
         stop_detached_descendants()
 
+'''.lstrip()
+
+
+def build_mutation_batch_script() -> str:
+    """Return the unchanged mutation wrapper using shared sandbox cleanup."""
+    return build_shadow_workspace_prelude() + r'''
 
 def evaluate(mutant, test_ids, timeout, detailed=False):
     reset_shadow()

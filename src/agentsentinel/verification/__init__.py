@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from agentsentinel.domain.models import (
+    CausalTraceReport,
+    FunctionCausalEvidence,
+    StatementCoverageReport,
+)
+from agentsentinel.verification.causal_trace import (
+    analyze_causal_trace,
+    collect_added_statement_lines,
+)
 from agentsentinel.verification.ci_gate import (
     CI_GATE_FAILED,
     CI_GATE_PASSED,
@@ -61,9 +70,12 @@ from agentsentinel.verification.second_order_guard import (
     reset_second_order_evasion_metrics,
     verify_second_order_evasion,
 )
+from agentsentinel.verification.statement_coverage import run_statement_coverage_probe
 from agentsentinel.verification.symbolic_constants import fold_symbolic_constant
 
 __all__ = [
+    "CausalTraceReport", "FunctionCausalEvidence", "StatementCoverageReport",
+    "analyze_causal_trace", "collect_added_statement_lines", "run_statement_coverage_probe",
     "MutantExecutionResult", "run_in_container_mutation_batch_detailed",
     "ERR_M13C_ABRUPT_FINALLY_EXIT", "ERR_M13C_CONTEXT_SUPPRESSION",
     "ERR_M13C_INDIRECT_REFLECTION", "ERR_M13C_OBFUSCATED_LITERAL",

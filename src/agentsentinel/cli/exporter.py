@@ -130,7 +130,10 @@ def export_evidence_bundle(
             ),
             "unknown_cost_attempts": unknown_cost_attempts,
         }
-        for summary_key in ("minimization_summary", "mutation_adequacy_summary"):
+        for summary_key in (
+            "minimization_summary", "mutation_adequacy_summary",
+            "causal_trace_report", "statement_coverage_report",
+        ):
             if summary_key in approval:
                 evidence_bundle[summary_key] = approval[summary_key]
         evidence: dict[str, Any] = {
@@ -183,6 +186,9 @@ def export_evidence_bundle(
                 raise ValueError("Approved policy configuration hash does not match its snapshot")
             evidence["policy_config"] = policy_config
             evidence["policy_config_hash"] = policy_config_hash
+        for key in ("causal_trace_report", "statement_coverage_report"):
+            if key in approval:
+                evidence[key] = approval[key]
         evidence = attest_payload(evidence, signing_key=signing_key)
         evidence_json = canonicalize_jcs(evidence)
 
@@ -260,6 +266,25 @@ def _render_report_md(ev: dict[str, Any]) -> str:
         lines.append(
             "- Equivalent mutants and weak test oracles limit interpretation of this score."
         )
+    causal = approval.get("causal_trace_report")
+    coverage = approval.get("statement_coverage_report")
+    if causal is not None:
+        lines.extend(["", "## Causal Traceability", ""])
+        functions = causal["modified_functions"]
+        disconnected = sum(row["hop_distance"] is None for row in functions)
+        lines.append(
+            f"- Modified functions: {len(functions)}; disconnected/unknown: {disconnected}; "
+            f"unresolved calls: {causal['unresolved_calls']}."
+        )
+        lines.append("- Advisory static Hop-0/1/2 evidence; dynamic dispatch may be unresolved.")
+    if coverage is not None:
+        lines.extend(["", "## Statement Coverage", ""])
+        lines.append(
+            f"- Observed: {len(coverage['covered_statements'])}; "
+            f"uncovered: {len(coverage['uncovered_statements'])}; "
+            f"test exit: {coverage['test_exit_code']}; timed out: {coverage['timed_out']}."
+        )
+        lines.append("- Advisory statement-start line observations; not branch or causal proof.")
     attempts = ev.get("attempts") or []
     if attempts:
         lines.append("")

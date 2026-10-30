@@ -59,11 +59,14 @@ from agentsentinel.domain.exceptions import (
 from agentsentinel.domain.exit_codes import ExitCode, is_harness_broken
 from agentsentinel.domain.models import (
     CaseSpec,
+    CausalTraceReport,
     EvidenceBundle,
     ExecutionResult,
+    FunctionCausalEvidence,
     MinimizationSummary,
     MutationAdequacySummary,
     PatchProposal,
+    StatementCoverageReport,
     SurvivedMutantDetail,
 )
 from agentsentinel.llm.exceptions import (
@@ -99,14 +102,21 @@ from agentsentinel.sandbox.container import (
     resolve_image_digest,
 )
 from agentsentinel.sandbox.workspace import WorkspaceManager
+from agentsentinel.verification.causal_trace import (
+    analyze_causal_trace,
+    collect_added_statement_lines,
+)
 from agentsentinel.verification.overfit_guard import verify_not_overfitted
 from agentsentinel.verification.post_pass_gate import (
+    _source,
     run_ddmin_hunk_minimization,
     run_mutation_adequacy_probe,
 )
+from agentsentinel.verification.statement_coverage import run_statement_coverage_probe
 
 if TYPE_CHECKING:
     from agentsentinel.llm.client import LLMClient
+    from agentsentinel.localization.traceback_parser import TracebackFrame
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -254,6 +264,8 @@ class RepairStateMachine:
     enable_iterative_ddmin: bool = field(default=False, kw_only=True)
     enable_single_container_mutation_batch: bool = field(default=False, kw_only=True)
     max_mutants: int = field(default=3, kw_only=True)
+    enable_causal_traceability: bool = field(default=False, kw_only=True)
+    enable_statement_coverage: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.max_mutants < 0:
@@ -459,6 +471,21 @@ class RepairStateMachine:
                     for detail in mutation_data["survived_mutant_details"]
                 ),
             )
+        causal_data = approval.get("causal_trace_report")
+        causal = None
+        if causal_data is not None:
+            causal = CausalTraceReport(
+                tuple(FunctionCausalEvidence(**row) for row in causal_data["modified_functions"]),
+                causal_data["unresolved_calls"], causal_data["has_traceback_roots"],
+            )
+        coverage_data = approval.get("statement_coverage_report")
+        coverage = None
+        if coverage_data is not None:
+            coverage = StatementCoverageReport(
+                tuple((row[0], row[1]) for row in coverage_data["covered_statements"]),
+                tuple((row[0], row[1]) for row in coverage_data["uncovered_statements"]),
+                coverage_data["test_exit_code"], coverage_data["timed_out"],
+            )
         bundle = EvidenceBundle(
             case_id=self.spec.case_id,
             spec=self.spec,
@@ -470,6 +497,8 @@ class RepairStateMachine:
             attempts=rec.attempts_used,
             minimization_summary=minimization,
             mutation_adequacy_summary=mutation,
+            causal_trace_report=causal,
+            statement_coverage_report=coverage,
         )
         return bundle
 
@@ -998,10 +1027,23 @@ class RepairStateMachine:
         original_patch, original_result = patch, result
         minimization: MinimizationSummary | None = None
         mutation: MutationAdequacySummary | None = None
+        self._causal_trace_report: CausalTraceReport | None = None
+        self._statement_coverage_report: StatementCoverageReport | None = None
+        trace_frames: tuple[TracebackFrame, ...] = ()
+        if self.enable_causal_traceability or self.enable_statement_coverage:
+            record = self._store.get_run(run_id)
+            baseline = (record.baseline_result_json if record else None) or {}
+            trace_frames = tuple(extract_traceback_frames(
+                str(baseline.get("stdout", "")), str(baseline.get("stderr", "")),
+                self.spec.allowed_edit_paths,
+            ))
         try:
-            if result.passed and (self.enable_ddmin_minimization or self.enable_mutation_probe):
+            if result.passed and (
+                self.enable_ddmin_minimization or self.enable_mutation_probe
+                or self.enable_causal_traceability or self.enable_statement_coverage
+            ):
                 patch, result, minimization, mutation = self._run_post_pass_checks(
-                    patch, result, patched_ws,
+                    patch, result, patched_ws, traceback_frames=trace_frames,
                 )
         except (
             HarnessSetupError, HarnessTimeoutError, OSError, ValueError, SyntaxError,
@@ -1047,6 +1089,8 @@ class RepairStateMachine:
                     self.enable_single_container_mutation_batch
                 ),
                 "max_mutants": self.max_mutants,
+                "enable_causal_traceability": self.enable_causal_traceability,
+                "enable_statement_coverage": self.enable_statement_coverage,
                 # External runner implementations do not expose verified settings.
                 "sandbox": runner_settings,
             }
@@ -1058,6 +1102,12 @@ class RepairStateMachine:
                 "policy_config": policy_config,
                 "policy_config_hash": compute_policy_config_hash(policy_config),
             }
+            for key, report in (
+                ("causal_trace_report", self._causal_trace_report),
+                ("statement_coverage_report", self._statement_coverage_report),
+            ):
+                if report is not None:
+                    approval_record[key] = asdict(report)
             if minimization is not None:
                 approval_record["minimization_summary"] = asdict(minimization)
             if mutation is not None:
@@ -1077,7 +1127,11 @@ class RepairStateMachine:
             self._pending_patch = patch
             self._pending_approval_binding = approval_record
             # Auto-approve hook (benchmark mode): bypass human review.
-            if self.auto_approve_on_fix and not (mutation and mutation.low_mutation_adequacy):
+            needs_review = bool(mutation and mutation.low_mutation_adequacy) or any(
+                report is not None and report.needs_review
+                for report in (self._causal_trace_report, self._statement_coverage_report)
+            )
+            if self.auto_approve_on_fix and not needs_review:
                 self.approve_run(
                     run_id=run_id,
                     approver_id="benchmark-auto-approve",
@@ -1128,6 +1182,7 @@ class RepairStateMachine:
 
     def _run_post_pass_checks(
         self, patch: PatchProposal, result: ExecutionResult, patched_ws: Path,
+        *, traceback_frames: tuple[TracebackFrame, ...] = (),
     ) -> tuple[PatchProposal, ExecutionResult, MinimizationSummary | None,
                MutationAdequacySummary | None]:
         """Evaluate optional gates before approval; never execute source on the host."""
@@ -1161,6 +1216,25 @@ class RepairStateMachine:
                     patched_workspace=selected_ws, spec=self.spec, runner=self.container_runner,
                     max_mutants=self.max_mutants, post_patch_result=result,
                     single_container_batch=self.enable_single_container_mutation_batch,
+                )
+            if self.enable_causal_traceability or self.enable_statement_coverage:
+                paths = [path for path in self.spec.allowed_edit_paths if path.endswith(".py")]
+                pre_sources = {
+                    path: _source(baseline, path, missing_allowed=True) for path in paths
+                }
+                post_sources = {
+                    path: _source(selected_ws, path, missing_allowed=True) for path in paths
+                }
+                self._causal_trace_report = analyze_causal_trace(
+                    pre_sources, post_sources, traceback_frames,
+                )
+            if self.enable_statement_coverage:
+                self._statement_coverage_report = run_statement_coverage_probe(
+                    runner=self.container_runner, case_id=self.spec.case_id,
+                    patch_diff_hash=patch.diff_hash, workspace_host_path=selected_ws,
+                    failing_test_ids=self.spec.failing_test_ids,
+                    statement_lines=collect_added_statement_lines(selected, baseline),
+                    timeout_seconds=max(1.0, 2.0 * result.wall_seconds),
                 )
             fingerprint = tier2_fingerprint(selected_ws, self.spec.allowed_edit_paths)
             self._selected_ast_hash = fingerprint.hex if fingerprint is not None else None
