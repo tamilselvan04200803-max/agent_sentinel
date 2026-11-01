@@ -384,13 +384,6 @@ tests/integration/test_docker_runner.py ................................ [Pass]
 
 ---
 
-## 📢 Social & Launch Kit
-
-Want to share AgentSentinel or write about it? Check out our ready-to-use launch kit:
-👉 [**LinkedIn & Social Media Launch Kit (`docs/LINKEDIN_LAUNCH_KIT.md`)**](docs/LINKEDIN_LAUNCH_KIT.md)  
-Includes viral LinkedIn post templates, Twitter/X threads, Hacker News copy, and a 7-slide carousel blueprint.
-
----
 
 ## 📄 License
 
