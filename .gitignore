@@ -8,3 +8,5 @@ __pycache__/
 *.db-wal
 *.db-shm
 .venv/
+
+.pytest_tmp/
